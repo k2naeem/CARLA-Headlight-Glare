@@ -65,10 +65,12 @@ rather than a tinted overlay.
 
 ![FFT aperture to starburst](slide_figures/fig6_fft_star.png)
 
-The **veil** is the layer that matters for the research question. It is what
-actually occludes a road user: objects beside a bright light lose contrast
-against their background rather than being covered up. That distinction is why
-the pipeline measures contrast loss rather than pixel coverage.
+The **veil** is intended to model the occlusion mechanism: objects beside a
+bright light lose contrast against their background rather than being covered
+up. That is why the pipeline measures contrast loss rather than pixel coverage.
+How much of the measured loss comes from the veil, and how much from the
+additive layers saturating both the object and its background, has not yet been
+separated.
 
 The pipeline end to end, illustrated on a synthetic scene: RGB frame, headlight-only
 mask, glare applied. Note the licence plate and the light pool on the road are
