@@ -1,0 +1,15 @@
+# Python dependencies for the glare pipeline and figure scripts.
+#
+# The figure scripts (make_slide_figures.py, glare_pipeline_figure.py,
+# glare_layers_figure.py) run with only these - no CARLA needed.
+numpy==2.2.2
+opencv-python==4.13.0
+
+# Carla_script.py and spawn_points.py additionally require the `carla` Python
+# API, which ships with the simulator rather than PyPI for most versions.
+# Install the wheel bundled with your CARLA build, e.g.:
+#
+#   pip install <CARLA>/PythonAPI/carla/dist/carla-0.9.15-*.whl
+#
+# The semantic tag constants in glare_mask.py assume the Cityscapes-aligned
+# palette used by CARLA 0.9.14 / 0.9.15.
