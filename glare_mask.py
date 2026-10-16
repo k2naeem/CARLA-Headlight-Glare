@@ -25,8 +25,8 @@ import numpy as np
 
 
 # Cityscapes-aligned CARLA palette (0.9.14/0.9.15). Verify for your build with
-# np.unique() over a frame containing a visible car. A cyclist occupies BOTH 13
-# and 19 - rider and bicycle carry separate labels, so anything measuring a
+# np.unique() over a frame containing a visible car. A cyclist occupies both 13
+# and 19 — rider and bicycle carry separate labels, so anything measuring a
 # cyclist must count both.
 VEHICLE_TAG = 14
 PEDESTRIAN_TAG = 12
@@ -138,7 +138,7 @@ def headlight_pixels_for_vehicles(vehicle_records, cam_matrix_world, K,
     but would still get a full-size starburst stamped on it. edge_margin keeps
     projections away from the frame border, where they are least trustworthy.
 
-    Facing is NOT checked here - camera_detected_headlights() gates on it first.
+    Facing is NOT checked here — camera_detected_headlights() gates on it first.
     """
     width, height = image_size
     world_pts = []
@@ -171,7 +171,7 @@ def visible_headlight_pixels(headlight_pixels, depth_map, image_size,
 
     A headlight is kept unless the buffer reports something closer than the
     headlight's own camera-space depth. Background behind the car's silhouette
-    reads as farther and is therefore kept - the projection is a point, the
+    reads as farther and is therefore kept — the projection is a point, the
     silhouette is not. `depth_map` may be downscaled and is indexed
     proportionally; the farthest depth in a small window is used so sub-pixel
     error at a car's edge does not cause false drops. Tolerance grows with
@@ -271,7 +271,7 @@ def count_detected_vehicle_pixels(footprint, depth_map, seg_labels, image_size,
         return int(np.count_nonzero(vehicle_px))
 
     # Depth is stored downscaled; crop the matching region and blow it back up
-    # to the footprint size. INTER_NEAREST throughout - averaging depth across a
+    # to the footprint size. INTER_NEAREST throughout — averaging depth across a
     # silhouette edge invents a surface that is neither car nor background.
     width, height = image_size
     depth_h, depth_w = depth_map.shape[:2]
@@ -354,7 +354,7 @@ def camera_detected_headlights(vehicle_records, cam_matrix_world, K, image_size,
             reports.append(report)
             continue
 
-        # 4. THE GATE: does the camera actually resolve this vehicle?
+        # 4. The Gate: does the camera actually resolve this vehicle?
         detected_px = count_detected_vehicle_pixels(
             footprint, depth_map, seg_labels, image_size,
             depth_tol_m=depth_tol_m, depth_tol_frac=depth_tol_frac,
@@ -489,7 +489,7 @@ _FFT_STAR_CACHE = {}
 
 # Sampled wavelengths (nm) and their approximate linear-sRGB (B, G, R) weights.
 # Short wavelengths (blue) diffract to a SMALLER radius, long (red) to a LARGER
-# radius - this radial-by-wavelength scaling is what produces the color fringe.
+# radius — this radial-by-wavelength scaling is what produces the color fringe.
 
 _WAVELENGTHS = [
     (440.0, (1.00, 0.10, 0.20)),   # blue
@@ -679,7 +679,7 @@ def _draw_star_flares(shape, flare_points, spikes=STAR_SPIKES):
 
     Each headlight is assigned one of several pre-built VARIANTS (different
     rotation + uneven spike brightness) so the streaks vary per light and don't
-    look like an identical repeated stamp. Variants are built once and cached -
+    look like an identical repeated stamp. Variants are built once and cached —
     per-frame cost is just a resize.
     """
     h, w = shape[:2]

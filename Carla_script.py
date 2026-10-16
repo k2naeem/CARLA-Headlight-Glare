@@ -87,7 +87,7 @@ except RuntimeError as e:
         "  1) pkill -f %s\n"
         "  2) lsof -i :%d   (should print nothing)\n"
         "  3) restart the CARLA server if the port stays bound\n"
-        "Do NOT just switch ports - two clients on one world will crash the server."
+        "Do NOT just switch ports — two clients on one world will crash the server."
         % (TM_PORT, e, os.path.basename(__file__), TM_PORT)
     )
 
@@ -100,9 +100,9 @@ weather = carla.WeatherParameters(
     cloudiness=80.0,             # Overcast, dark sky (no moonlight bleed)
     precipitation=0.0,           # No rain
     precipitation_deposits=0.0,  # Dry roads
-    sun_altitude_angle=-90.0,    # Sun fully below horizon - pitch dark night
+    sun_altitude_angle=-90.0,    # Sun fully below horizon — pitch dark night
     wetness=0.0,                 # Dry
-    fog_density=0.0,             # No fog - clear dark night
+    fog_density=0.0,             # No fog — clear dark night
     fog_distance=0.0,
     fog_falloff=0.0,
     wind_intensity=0.0,
@@ -110,7 +110,7 @@ weather = carla.WeatherParameters(
 )
 
 world.set_weather(weather)
-logger.info("Weather applied - clear, pitch-dark night (no fog, no rain)")
+logger.info("Weather applied — clear, pitch-dark night (no fog, no rain)")
 
 
 
@@ -301,7 +301,7 @@ for dist in LEAD_STACK_DISTANCES:
         logger.info("Spawned NPC %.0fm ahead (same lane): actor_id=%s", dist, npc.id)
 
 # --- Spawn NPC vehicles BEHIND the ego (same lane) ---
-behind_distances = [15, 30, 50]  # Meters behind ego - close together
+behind_distances = [15, 30, 50]  # Meters behind ego — close together
 
 for dist in behind_distances:
     # .previous() goes backward along the road
@@ -338,7 +338,7 @@ if npc_list:
 # lane line at roughly the oncoming car's range therefore falls inside the glare.
 OBSTACLE_KIND = 'cyclist'      # 'cyclist' or 'pedestrian'
 
-OBSTACLE_SPAWN_AT_S = 2.0      # appears at THIS moment, seconds into the run
+OBSTACLE_SPAWN_AT_S = 2.0      # appears at this moment, seconds into the run
 OBSTACLE_SPAWN_RETRY_S = 3.0   # retried only if that spot is physically blocked
 
 # Default is a fixed distance ahead, the result is clamped to the MIN/MAX range.
@@ -403,7 +403,7 @@ else:
     OBSTACLE_TAGS = (PEDESTRIAN_TAG,)
 
 if obstacle_bp is None:
-    logger.warning("No blueprint for OBSTACLE_KIND=%r - occlusion scenario disabled",
+    logger.warning("No blueprint for OBSTACLE_KIND=%r — occlusion scenario disabled",
                    OBSTACLE_KIND)
 else:
     logger.info("Occlusion obstacle: %s (kind=%s, semantic tags %s)",
@@ -485,7 +485,7 @@ def _try_spawn_occlusion_obstacle():
     cross_wp = ahead[0]                     # the ego's lane at the crossing point
     lane_right = cross_wp.transform.get_right_vector()
 
-    # Which side the oncoming traffic - and therefore the glare - is on. 
+    # Which side the oncoming traffic — and therefore the glare — is on. 
     onc_wp = oncoming_lane_wp(cross_wp)
     if onc_wp is not None:
         to_onc_x = onc_wp.transform.location.x - cross_wp.transform.location.x
@@ -548,7 +548,7 @@ def _try_spawn_occlusion_obstacle():
         traffic_manager.collision_detection(ego_vehicle, actor, False)
     except (AttributeError, RuntimeError) as exc:
         logger.warning("[OBST] Could not disable ego collision detection for %s "
-                       "(%s) - the ego may brake for it", actor.id, exc)
+                       "(%s) — the ego may brake for it", actor.id, exc)
 
     spawn_dist = ego_tf.location.distance(spawn_loc)
     logger.info("[OBST] %s %s spawned at t=%.1f s, %.1f m ahead of the ego "
@@ -622,7 +622,7 @@ def lidar_to_bev(point_cloud):
     px = np.clip(px, 0, BEV_SIZE - 1)
     py = np.clip(py, 0, BEV_SIZE - 1)
 
-    # Create BEV image - black background
+    # Create BEV image — black background
     bev = np.zeros((BEV_SIZE, BEV_SIZE, 3), dtype=np.uint8)
 
     # Height-based HSV colormap: hue runs magenta (ground) -> red (highest)
@@ -652,7 +652,7 @@ def lidar_to_bev(point_cloud):
         bev[epy, epx2] = ecolors
         bev[epy2, epx2] = ecolors
 
-        # Extra bright for very tall objects (vehicles, walls) - 3x3 block
+        # Extra bright for very tall objects (vehicles, walls) — 3x3 block
         tall_mask = z[elevated_mask] > 0.5
         if np.any(tall_mask):
             tpx = epx[tall_mask]
@@ -934,7 +934,7 @@ try:
     logger.info("Ego route path set (%d waypoints toward spawn %d)",
                 len(route_locations), DEST_SPAWN_IDX)
 except Exception as e:
-    logger.warning("traffic_manager.set_path unavailable (%s) - using plain autopilot", e)
+    logger.warning("traffic_manager.set_path unavailable (%s) — using plain autopilot", e)
 
 TOTAL_TICKS = int(DURATION_S / FIXED_DELTA)
 logger.info("Running for %.0f seconds (%d ticks)", DURATION_S, TOTAL_TICKS)
@@ -952,7 +952,7 @@ for npc in opposite_npcs:
 
 OBSTACLE_SPAWN_TICK = int(OBSTACLE_SPAWN_AT_S / FIXED_DELTA)
 OBSTACLE_RETRY_TICKS = int(OBSTACLE_SPAWN_RETRY_S / FIXED_DELTA)
-logger.info("[OBST] %s appears at tick %d (t=%.1f s), %.0f m ahead - or %.1f m "
+logger.info("[OBST] %s appears at tick %d (t=%.1f s), %.0f m ahead — or %.1f m "
             "behind the front oncoming car if one is within %.0f m. Clamped to "
             "%.0f-%.0f m. Retrying until tick %d only if that spot is blocked.",
             OBSTACLE_KIND, OBSTACLE_SPAWN_TICK, OBSTACLE_SPAWN_AT_S,
@@ -979,13 +979,13 @@ for tick in range(TOTAL_TICKS):
 
                     obstacle.apply_control(obstacle_control)
             elif obs_elapsed <= obstacle_run_duration_s + 0.1:
-                # Reached the ego's lane - hold there, in the ego's path.
+                # Reached the ego's lane — hold there, in the ego's path.
                 if obstacle_control is not None:
                     obstacle.apply_control(carla.WalkerControl(speed=0.0))
                 elif OBSTACLE_HOLD_IN_LANE:
                     obstacle.disable_constant_velocity()
         except RuntimeError:
-            pass  # obstacle was destroyed - nothing to steer
+            pass  # obstacle was destroyed — nothing to steer
 
     # Reapply lights so they stay on through the run
     if tick % 20 == 0:
@@ -1020,7 +1020,7 @@ if obstacle_lidar_hits:
                        "spawned (up to %.0f m).",
                        lidar_bp.get_attribute('range'), OBSTACLE_MAX_AHEAD_M)
 
-logger.info("Finished run - stopping sensors")
+logger.info("Finished run — stopping sensors")
 
 # Stop listening before encoding video
 first_person_camera.stop()
@@ -1032,7 +1032,7 @@ lidar.stop()
 def encode_video(frames, path, size, label):
     """Write `frames` to `path` as mp4v at FPS. Warns and skips if empty."""
     if not frames:
-        logger.warning("No %s frames captured - %s not created", label,
+        logger.warning("No %s frames captured — %s not created", label,
                        os.path.basename(path))
         return
     logger.info("Encoding %d %s frames to %s at %.1f FPS",
@@ -1066,7 +1066,7 @@ _base_frame_ids = (
 
 paired_frame_ids = sorted(_base_frame_ids & set(fp_depth_by_frame.keys()))
 if not paired_frame_ids and _base_frame_ids:
-    logger.warning("[GATE] No frames carry depth - the detection gate is running "
+    logger.warning("[GATE] No frames carry depth — the detection gate is running "
                    "SEGMENTATION-ONLY, which cannot tell one car from another. "
                    "Expect ghost glare to come back. Check the depth camera.")
     paired_frame_ids = sorted(_base_frame_ids)
@@ -1106,12 +1106,12 @@ if paired_frame_ids:
 
       # Colour per gate verdict. GREEN = allowed to glare, everything else = blocked
       GATE_COLORS = {
-          'detected':          (0, 255, 0),    # green   - camera resolves it, glare ON
-          'not_detected':      (0, 0, 255),    # red     - hidden / too small to see
-          'off_camera':        (255, 0, 255),  # magenta - outside the frame entirely
-          'too_far':           (0, 140, 255),  # orange  - beyond the glare range
-          'facing_away':       (0, 255, 255),  # yellow  - headlights point elsewhere
-          'headlights_hidden': (255, 255, 0),  # cyan    - seen, but lights occluded
+          'detected':          (0, 255, 0),    # green   — camera resolves it, glare ON
+          'not_detected':      (0, 0, 255),    # red     — hidden / too small to see
+          'off_camera':        (255, 0, 255),  # magenta — outside the frame entirely
+          'too_far':           (0, 140, 255),  # orange  — beyond the glare range
+          'facing_away':       (0, 255, 255),  # yellow  — headlights point elsewhere
+          'headlights_hidden': (255, 255, 0),  # cyan    — seen, but lights occluded
           'degenerate':        (128, 128, 128),
       }
 
@@ -1203,12 +1203,8 @@ if paired_frame_ids:
     compare_writer = cv2.VideoWriter(COMPARE_OUTPUT_PATH, fourcc, FPS, (half_w * 2, half_h))
 
     # --- Obstacle occlusion measurement --------------------------------------
-    # The scenario uses glare hides the obstacle. This measures it rather than
-    # asserting it: on every frame where the object is visible, compare the contrast
-    # between its pixels and the surrounding background, with and without glare.
-    # Glare lifts the local black level, so the silhouette loses separation from its
-    # background - that contrast drop IS the occlusion, as a number. Read it beside
-    # the [OBST] LIDAR point counts for the two halves of the argument.
+    # The scenario uses glare hides the obstacle. 
+    
     OBS_MIN_PX = 60           # below this the object is a few specks; skip contrast
     obs_frames = 0            # frames big enough to measure contrast on
     obs_any_frames = 0        # frames the object appears in AT ALL
@@ -1356,7 +1352,7 @@ if paired_frame_ids:
                     100.0 * (mean_plain - mean_glare) / max(mean_plain, 1e-6))
         drop, fid, n_px, c_plain, c_glare, plain_crop, glare_crop = worst_obs
         logger.info("[OBST] Worst frame %s: %d px, contrast %.1f -> %.1f "
-                    "(drop %.1f) - the moment the object is most hidden",
+                    "(drop %.1f) — the moment the object is most hidden",
                     fid, n_px, c_plain, c_glare, drop)
         # Side-by-side crop of that moment, scaled up for a slide.
         h_c = max(plain_crop.shape[0], glare_crop.shape[0])
@@ -1384,7 +1380,7 @@ if paired_frame_ids:
                        "(c) bright pixels > 0? if 0, lower brightness_thresh. "
                        "Also try increasing base_radius_px if projection is slightly off.")
 else:
-    logger.warning("No paired RGB+seg frames - glare video not created")
+    logger.warning("No paired RGB+seg frames — glare video not created")
 
 BEV_OUTPUT_PATH = os.path.join(EXPORT_DIR, 'lidar_bev.mp4')
 encode_video(lidar_bev_frames, BEV_OUTPUT_PATH, (BEV_SIZE, BEV_SIZE), "LIDAR BEV")
