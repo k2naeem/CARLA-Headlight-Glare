@@ -12,6 +12,7 @@ venv/
 
 # Simulation outputs
 exports/
+exports_closed_loop/
 _out/
 *.mp4
 *.avi
