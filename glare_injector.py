@@ -18,8 +18,10 @@ images an agent drives on.
                         class GlareQwenAgent(GlareMixin, QwenAgent):
                             pass
 
-                    Inside Bench2Drive it builds its own injector on the first
-                    tick. A script that owns the world and ego builds one itself
+                    Inside Bench2Drive it builds its own injector in setup(),
+                    which DeepSight's leaderboard calls after the ego exists and
+                    before the first tick, so frame 1 already has seg/depth.
+                    A script that owns the world and ego builds one itself
                     and hands it over with agent.use_glare_injector(injector).
 
 Severity comes from the GLARE_SEVERITY environment variable (default 1.0), so
@@ -140,6 +142,7 @@ class GlareInjector:
 
         self.log = []
         self.missing_aux_frames = 0
+        self.warmup_frames = 0
         self._cond = threading.Condition()
         self._records_frame = None
         self._records = []
@@ -157,6 +160,11 @@ class GlareInjector:
             if self.severity > 0.0:
                 self._spawn_aux(cam)
             self.cameras[cam_id] = cam
+
+        # In synchronous mode the seg/depth cameras first render on the tick
+        # after they spawn. Frames up to this one can never have seg/depth.
+        self._spawn_frame = (world.get_snapshot().frame
+                             if self.severity > 0.0 and self.cameras else None)
 
         # Build the cached FFT starbursts now, so the first frame of the run is
         # not a few hundred ms slower than the rest.
@@ -295,7 +303,17 @@ class GlareInjector:
             return bgr
 
         entry = {'frame': int(frame), 'camera': cam_id, 'severity': self.severity,
-                 'glaring_headlights': 0, 'verdicts': {}, 'aux_missing': False}
+                 'glaring_headlights': 0, 'verdicts': {}, 'aux_missing': False,
+                 'warmup': False}
+
+        # A frame rendered before the seg/depth cameras existed: pass it through
+        # without waiting. It is warm-up, not a missing frame, so strict mode
+        # does not stop the run over it.
+        if self._spawn_frame is not None and frame <= self._spawn_frame:
+            self.warmup_frames += 1
+            entry['warmup'] = True
+            self.log.append(entry)
+            return bgr
 
         t_wait = time.perf_counter()
         aux = self._wait_for(cam, frame)
@@ -362,6 +380,9 @@ class GlareInjector:
         if self.missing_aux_frames:
             logger.warning("[GLARE] %d frame(s) went to the agent without glare "
                            "because their seg/depth was missing", self.missing_aux_frames)
+        if self.warmup_frames:
+            logger.info("[GLARE] %d frame(s) predate the seg/depth cameras and "
+                        "went to the agent without glare", self.warmup_frames)
 
 
 class GlareMixin:
@@ -382,6 +403,17 @@ class GlareMixin:
         """Use an injector built by the caller (scripts that own the world and ego)."""
         self._glare = injector
 
+    def setup(self, *args, **kwargs):
+        """Build the injector as soon as the agent is set up.
+
+        DeepSight's leaderboard calls setup() after RouteScenario has spawned
+        the ego and before the first tick. Spawning the seg/depth cameras here
+        means they render alongside the agent's own cameras from frame 1. If
+        the ego is not there yet, tick() tries again.
+        """
+        super().setup(*args, **kwargs)
+        self._glare_injector()
+
     def tick(self, input_data):
         tick_data = super().tick(input_data)
         injector = self._glare_injector()
@@ -395,10 +427,10 @@ class GlareMixin:
         return tick_data
 
     def _glare_injector(self):
-        """Create the injector on the first tick.
+        """The injector, created on first use (normally from setup()).
 
-        The ego does not exist yet when setup() runs, so this cannot happen
-        there. Imported here so the module loads outside the leaderboard.
+        Returns None while there is no ego. Imported here so the module loads
+        outside the leaderboard.
         """
         injector = getattr(self, '_glare', None)
         if injector is None:

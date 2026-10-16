@@ -43,8 +43,12 @@ MODEL_IMAGE_SIZE = (644, 364)      # (width, height) every image is resized to
 
 # DeepSight's format_message(): for i in 4..1, history index = i * frame // 2,
 # with self.frame = 10, i.e. 20, 15, 10 and 5 steps back. Its prompt calls them
-# 2.0 s, 1.5 s, 1.0 s and 0.5 s ago, which holds if the agent runs at 10 Hz.
+# 2.0 s, 1.5 s, 1.0 s and 0.5 s ago. That holds because DeepSight's leaderboard
+# runs at 10 Hz (leaderboard_evaluator.py: frame_rate = 10) and calls the agent
+# every tick. A test must tick at AGENT_HZ too, or the labels are wrong.
+AGENT_HZ = 10.0
 HISTORY_STEPS = (20, 15, 10, 5)
+HISTORY_SECONDS = (2.0, 1.5, 1.0, 0.5)
 HISTORY_LABELS = ('2.0s ago', '1.5s ago', '1.0s ago', '0.5s ago')
 
 # Camera rig from DeepSight's sensors(). The leaderboard sets only size and FOV
