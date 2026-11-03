@@ -143,6 +143,9 @@ class GlareInjector:
         self.log = []
         self.missing_aux_frames = 0
         self.warmup_frames = 0
+        # Optional actor -> bool set by the caller; vehicles it rejects never
+        # glare (the Bench2Drive agent uses it to leave parked cars out).
+        self.vehicle_filter = None
         self._cond = threading.Condition()
         self._records_frame = None
         self._records = []
@@ -259,6 +262,8 @@ class GlareInjector:
         for actor in self.world.get_actors().filter('vehicle.*'):
             try:
                 if actor.id == self.hero.id or not actor.is_alive:
+                    continue
+                if self.vehicle_filter is not None and not self.vehicle_filter(actor):
                     continue
                 if actor.id not in self._static:
                     bb = actor.bounding_box

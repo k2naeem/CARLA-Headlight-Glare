@@ -50,7 +50,22 @@ python run.py run overtaking --glare 1.0
 
 The target is a family, `all`, or route ids like `3410` or `3410,3436`
 (`python run.py list` shows them). Options: `--out` (default `$GLARE_OUT`),
-`--glare` (0 to 2), `--gpu`, `--port`, `--no-strict`.
+`--glare` (0 to 2), `--headlights`, `--gpu`, `--port`, `--no-strict`.
+
+**Only driving cars glare.** A car counts as driving once it has moved faster
+than 1 m/s during the run. A car waiting at a light that drove there still
+glares, a car pulling out of a parking spot starts glaring when it moves, and
+a parked car never glares, even if Bench2Drive has its lights on.
+
+**Headlights.** Bench2Drive's night traffic mostly drives with its headlights
+off, so on its own there is little to glare. `--headlights low` (the default)
+switches on low beams for every driving car within 90 m of the ego, each step,
+and stops CARLA's Traffic Manager from switching them back off; `high` adds
+high beams; `scene` keeps Bench2Drive's lighting. Each run records the mode in
+its folder name, and `headlights.json` counts the driving, parked and lit
+cars. Bench2Drive itself turns scenario cars' lights off beyond about 50 m of
+the ego, so those light up only when closer; background traffic stays lit to
+90 m. Keep Bench2Drive's own files unedited.
 
 | Family | Scenarios | Why |
 | --- | --- | --- |
@@ -65,10 +80,10 @@ folder, so runs never overwrite each other:
 
 ```
 ~/glare_runs/
-├── 3410_AccidentTwoWays_Town13_glare1_20261103-143530/
+├── 3410_AccidentTwoWays_Town13_glare1_low_20261103-143530/
 │   ├── compare_CAM_FRONT.mp4   clean | glared front camera, the whole route
 │   ├── model_view/             the 10 inputs as DeepSight would see them
-│   ├── camera/  clean/  meta/  glare_log.jsonl  run.log  run_info.json
+│   ├── camera/  clean/  meta/  glare_log.jsonl  headlights.json  run.log  run_info.json
 └── summary.csv
 ```
 
