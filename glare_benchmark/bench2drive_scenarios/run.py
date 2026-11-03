@@ -19,7 +19,9 @@ Paths come from options or environment variables:
 Every route runs as its own leaderboard call and is saved to its own folder,
 <out>/<id>_<scenario>_<town>_glare<level>_<date-time>/, so a crash stops only
 that route and runs never overwrite each other. The car is driven by the
-leaderboard's NpcAgent (--driver npc); glare_agent.py records the cameras.
+leaderboard's NpcAgent (--driver npc); glare_agent.py records the cameras and,
+with --headlights low|high (default low), switches on nearby traffic's
+headlights, which Bench2Drive mostly leaves off at night.
 
 Bench2Drive's license (CC BY-NC-ND 4.0) does not allow sharing its route files,
 so scenarios/ is kept out of git: run `extract` on each machine.
@@ -224,6 +226,7 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file):
         'SAVE_PATH': run_dir,
         'GLARE_OUTPUT': run_dir,
         'GLARE_SEVERITY': str(args.glare),
+        'GLARE_HEADLIGHTS': args.headlights,
         'GLARE_STRICT': '0' if args.no_strict else '1',
         'CUDA_VISIBLE_DEVICES': str(args.gpu),
     })
@@ -232,7 +235,8 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file):
 
 def run_one(args, b2d, carla, scenario, out_root):
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-    run_dir = os.path.join(out_root, '%s_glare%g_%s' % (scenario['name'], args.glare, stamp))
+    run_dir = os.path.join(out_root, '%s_glare%g_%s_%s' % (scenario['name'], args.glare,
+                                                           args.headlights, stamp))
     os.makedirs(run_dir)
     route_file = os.path.join(SCENARIOS, scenario['file'])
     cmd = [sys.executable, os.path.join('leaderboard', 'leaderboard', 'leaderboard_evaluator.py'),
@@ -252,7 +256,8 @@ def run_one(args, b2d, carla, scenario, out_root):
             log.write(line)
         status = proc.wait()
     with open(os.path.join(run_dir, 'run_info.json'), 'w', encoding='utf-8') as fh:
-        json.dump(dict(scenario, glare_level=args.glare, driver=args.driver, started=started,
+        json.dump(dict(scenario, glare_level=args.glare, headlights=args.headlights,
+                       driver=args.driver, started=started,
                        finished=datetime.datetime.now().isoformat(timespec='seconds'),
                        exit_status=status), fh, indent=1)
 
@@ -269,7 +274,8 @@ def cmd_run(args):
         sys.exit('No Bench2Drive leaderboard in %s (python run.py check)' % b2d)
     scenarios = select(args.target, load_index())
     os.makedirs(out_root, exist_ok=True)
-    print('%d scenario(s), glare %g, driver %s -> %s' % (len(scenarios), args.glare, args.driver, out_root))
+    print('%d scenario(s), glare %g, headlights %s, driver %s -> %s'
+          % (len(scenarios), args.glare, args.headlights, args.driver, out_root))
 
     failed = [s['name'] for s in scenarios if run_one(args, b2d, carla, s, out_root) != 0]
     print()
@@ -368,6 +374,9 @@ def main():
     r.add_argument('target', help='all, a family, or route ids like 3410,3436')
     r.add_argument('--glare', type=float, default=1.0, help='glare level, 0 to 2 (default 1.0)')
     r.add_argument('--out', help='output folder (default $GLARE_OUT or ~/glare_runs)')
+    r.add_argument('--headlights', choices=['low', 'high', 'scene'], default='low',
+                   help="force low or high beams on nearby traffic (default low); "
+                        "'scene' keeps Bench2Drive's lighting, where most cars are dark")
     r.add_argument('--driver', choices=sorted(DRIVERS), default='npc')
     r.add_argument('--port', type=int, default=30000)
     r.add_argument('--tm-port', type=int, default=50000)
