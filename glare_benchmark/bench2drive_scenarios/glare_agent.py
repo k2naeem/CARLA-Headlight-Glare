@@ -107,7 +107,7 @@ class GlareAgent(NpcAgent):
         hero = CarlaDataProvider.get_hero_actor()
         if cam is None or hero is None or frame not in cam.pose:
             return
-        cam_matrix, cam_loc = cam.pose[frame]
+        cam_matrix, cam_loc = injector.camera_pose(cam, cam.pose[frame])
         records = injector._vehicle_records(frame)
         _, reports = camera_detected_headlights(
             records, cam_matrix, cam.K, (cam.width, cam.height),
