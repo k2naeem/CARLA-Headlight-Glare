@@ -201,7 +201,7 @@ class GlareInjector:
 
     def _on_seg(self, cam, image):
         labels = decode_labels(image)
-        tf = image.transform              # the camera's world pose at capture
+        tf = image.transform              # pose at capture; on large maps see camera_pose()
         pose = (tf.get_matrix(), (tf.location.x, tf.location.y, tf.location.z))
         with self._cond:
             cam.seg[image.frame] = labels
@@ -215,6 +215,26 @@ class GlareInjector:
             cam.depth[image.frame] = depth
             self._prune(cam)
             self._cond.notify_all()
+
+    @staticmethod
+    def camera_pose(cam, image_pose=None):
+        """The camera's world pose, (4x4 matrix, location), in vehicle coordinates.
+
+        On CARLA's large maps (Town12, Town13) a sensor image's transform is
+        relative to a shifted world origin, kilometres from the coordinates
+        actors report, so a pose read from the image puts every car far behind
+        the camera. Read it from the sensor actor instead: in synchronous mode
+        the world has not moved since the frame was captured, so it is the
+        same pose, in the vehicles' coordinates. Falls back to the image's pose
+        if the sensor is gone.
+        """
+        for sensor in cam.sensors:
+            try:
+                tf = sensor.get_transform()
+                return tf.get_matrix(), (tf.location.x, tf.location.y, tf.location.z)
+            except RuntimeError:
+                continue
+        return image_pose
 
     @staticmethod
     def _prune(cam):
@@ -334,7 +354,8 @@ class GlareInjector:
                 raise RuntimeError(msg)
             logger.warning(msg)
             return bgr
-        seg, depth, (cam_matrix, cam_loc) = aux
+        seg, depth, image_pose = aux
+        cam_matrix, cam_loc = self.camera_pose(cam, image_pose)
 
         # Bench2Drive hands the agent a [:, :, :3] view of a BGRA buffer. OpenCV
         # cannot read that strided view, so copy it into a contiguous array.
