@@ -52,6 +52,12 @@ The target is a family, `all`, or route ids like `3410` or `3410,3436`
 (`python run.py list` shows them). Options: `--out` (default `$GLARE_OUT`),
 `--glare` (0 to 2), `--headlights`, `--gpu`, `--port`, `--no-strict`.
 
+**Debug view.** Every 10 steps (`--debug-every`, 0 = off) each run saves
+`debug/step_<step>.jpg`: the front frame with each lit car drawn where the
+glare code places it, labelled with its id, verdict and distance (green =
+detected, red = rejected). `glare_debug.jsonl` holds the numbers, including the
+camera position the glare code uses next to where the camera should be.
+
 **Only driving cars glare.** A car counts as driving once it has moved faster
 than 1 m/s during the run. A car waiting at a light that drove there still
 glares, a car pulling out of a parking spot starts glaring when it moves, and

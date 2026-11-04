@@ -33,15 +33,22 @@ Writes to $GLARE_OUTPUT (run.py sets one folder per route):
 """
 import copy
 import json
+import math
 import os
 
 import carla
 import cv2
+import numpy as np
 
 from leaderboard.autoagents.npc_agent import NpcAgent
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
 from deepsight_input_agent import DEEPSIGHT_CAMERA_SPECS, JPEG_QUALITY, make_glare_agent_class
+from glare_mask_closed_loop import camera_detected_headlights, project_points_to_image
+
+# Every N steps, save the front frame with each lit car's predicted position
+# and glare verdict drawn on, plus the numbers ($GLARE_DEBUG_EVERY, 0 = off).
+DEBUG_EVERY = int(os.environ.get('GLARE_DEBUG_EVERY', '10'))
 
 # Glare reaches 70 m (GlareInjector.max_distance); light a little beyond so a
 # car is already lit when it comes into range.
@@ -81,6 +88,76 @@ class GlareAgent(NpcAgent):
         injector = self.inputs._glare
         if injector is not None:
             injector.vehicle_filter = lambda actor: actor.id in self._driving_ids
+
+    def _debug_front(self, input_data):
+        """Show the glare code's view of CAM_FRONT: where it puts each lit car, and why.
+
+        Writes debug/step_<step>.jpg (the unglared frame, each lit car's centre
+        and box drawn where the glare code projects it, labelled with its id,
+        verdict and distance) and a line in glare_debug.jsonl with the numbers:
+        the camera position the glare code uses (from the seg camera) next to
+        where the RGB camera should be (ego pose + its mounting offset).
+        """
+        injector = self.inputs._glare
+        step = self.inputs.step
+        if not DEBUG_EVERY or injector is None or step % DEBUG_EVERY:
+            return
+        cam = injector.cameras.get('CAM_FRONT')
+        frame = input_data['CAM_FRONT'][0]
+        hero = CarlaDataProvider.get_hero_actor()
+        if cam is None or hero is None or frame not in cam.pose:
+            return
+        cam_matrix, cam_loc = cam.pose[frame]
+        records = injector._vehicle_records(frame)
+        _, reports = camera_detected_headlights(
+            records, cam_matrix, cam.K, (cam.width, cam.height),
+            depth_map=cam.depth.get(frame), seg_labels=cam.seg.get(frame), cam_location=cam_loc,
+            require_facing=True, max_distance=injector.max_distance,
+            min_detected_px=injector.min_detected_px, return_reports=True)
+
+        hero_tf = hero.get_transform()
+        spec = DEEPSIGHT_CAMERA_SPECS[0]
+        expected = hero_tf.transform(carla.Location(x=spec['x'], y=spec['y'], z=spec['z']))
+        expected = (expected.x, expected.y, expected.z)
+        m = np.asarray(cam_matrix)
+        entry = {
+            'step': step, 'frame': frame,
+            'camera_location_used': [round(v, 2) for v in cam_loc],
+            'camera_location_expected': [round(v, 2) for v in expected],
+            'camera_offset_m': round(math.dist(cam_loc, expected), 2),
+            'camera_yaw_used': round(math.degrees(math.atan2(m[1][0], m[0][0])), 1),
+            'ego_yaw': round(hero_tf.rotation.yaw, 1),
+            'cars': [],
+        }
+
+        img = input_data['CAM_FRONT'][1][:, :, :3].copy()
+        h, w = img.shape[:2]
+        cv2.putText(img, 'camera offset %.2f m  yaw used %.1f  ego yaw %.1f' % (
+            entry['camera_offset_m'], entry['camera_yaw_used'], entry['ego_yaw']),
+            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
+        for rec, rep in zip(records, reports):
+            to_cam = np.subtract(cam_loc, rec['location'])
+            dist = float(np.linalg.norm(to_cam))
+            facing = float(np.dot(rec['forward'], to_cam / max(dist, 1e-6)))
+            px, py, depth = project_points_to_image([rec['location']], cam_matrix, cam.K)[0]
+            entry['cars'].append({'id': rec['id'], 'status': rep['status'], 'dist_m': round(dist, 1),
+                                  'facing': round(facing, 2), 'cam_depth_m': round(float(depth), 1),
+                                  'pixel': None if px is None else [round(px), round(py)],
+                                  'location': [round(v, 1) for v in rec['location']]})
+            color = (0, 255, 0) if rep['status'] == 'detected' else (0, 0, 255)
+            if rep['footprint']:
+                x0, y0, x1, y1 = rep['footprint']
+                cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
+            if px is not None and -w < px < 2 * w and -h < py < 2 * h:
+                cx, cy = int(min(max(px, 5), w - 5)), int(min(max(py, 5), h - 5))
+                cv2.circle(img, (cx, cy), 8, color, -1)
+                cv2.putText(img, '%s %s %.0fm' % (rec['id'], rep['status'], dist), (cx + 10, cy),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+        os.makedirs(os.path.join(self.save_dir, 'debug'), exist_ok=True)
+        cv2.imwrite(os.path.join(self.save_dir, 'debug', 'step_%05d.jpg' % step), img,
+                    [cv2.IMWRITE_JPEG_QUALITY, 85])
+        with open(os.path.join(self.save_dir, 'glare_debug.jsonl'), 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps(entry) + '\n')
 
     def sensors(self):
         return copy.deepcopy(DEEPSIGHT_CAMERA_SPECS) + [
@@ -132,6 +209,7 @@ class GlareAgent(NpcAgent):
         # them in the agent's own tick() result.
         cv2.imwrite(os.path.join(self.clean_dir, '%05d.jpg' % self.inputs.step),
                     input_data['CAM_FRONT'][1][:, :, :3], [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+        self._debug_front(input_data)
         return super().run_step(input_data, timestamp)
 
     def destroy(self):

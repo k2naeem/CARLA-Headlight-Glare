@@ -227,6 +227,7 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file):
         'GLARE_OUTPUT': run_dir,
         'GLARE_SEVERITY': str(args.glare),
         'GLARE_HEADLIGHTS': args.headlights,
+        'GLARE_DEBUG_EVERY': str(args.debug_every),
         'GLARE_STRICT': '0' if args.no_strict else '1',
         'CUDA_VISIBLE_DEVICES': str(args.gpu),
     })
@@ -377,6 +378,8 @@ def main():
     r.add_argument('--headlights', choices=['low', 'high', 'scene'], default='low',
                    help="force low or high beams on nearby traffic (default low); "
                         "'scene' keeps Bench2Drive's lighting, where most cars are dark")
+    r.add_argument('--debug-every', type=int, default=10,
+                   help='save debug/ frames with each lit car and its glare verdict every N steps (0 = off)')
     r.add_argument('--driver', choices=sorted(DRIVERS), default='npc')
     r.add_argument('--port', type=int, default=30000)
     r.add_argument('--tm-port', type=int, default=50000)
