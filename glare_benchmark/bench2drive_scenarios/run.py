@@ -10,6 +10,11 @@ One script for everything. Run it from the conda env that has the CARLA
     python run.py run 3410 --glare 1.0         # or one route (or 3410,3436, or all)
     python run.py summary ~/glare_runs         # glare report for every run in a folder
 
+Our own pop-out-from-glare scenarios (../custom_scenarios) run the same way
+once ../custom_scenarios/make_routes.py has written their routes:
+
+    python run.py run glare_popout --glare 1.0 --headlights scene
+
 Paths come from options or environment variables:
     --b2d    / B2D_DIR     the Bench2Drive folder: DeepSight's repo/bench2drive
                            (its leaderboard runs at 10 Hz, as DeepSight expects)
@@ -36,12 +41,16 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 SCENARIOS = os.path.join(HERE, 'scenarios')
 INDEX = os.path.join(SCENARIOS, 'index.json')
+CUSTOM = os.path.join(os.path.dirname(HERE), 'custom_scenarios')
+CUSTOM_ROUTES = os.path.join(CUSTOM, 'routes')       # written by custom_scenarios/make_routes.py
+CUSTOM_MODULES = ('glare_popout.py',)                # our scenario classes
 
 # The Bench2Drive scenario types worth testing under oncoming glare, by family.
 # A night route whose scenario type is not listed here is not saved.
@@ -96,10 +105,20 @@ def out_dir(args):
 
 
 def load_index():
-    if not os.path.exists(INDEX):
-        sys.exit('No saved scenarios yet. Run: python run.py extract')
-    with open(INDEX, encoding='utf-8') as fh:
-        return json.load(fh)
+    """Every saved scenario: Bench2Drive's (run.py extract) and ours (make_routes.py).
+    Each entry's 'file' is an absolute path; 'custom' marks ours."""
+    scenarios = []
+    for folder in (SCENARIOS, CUSTOM_ROUTES):
+        path = os.path.join(folder, 'index.json')
+        if os.path.exists(path):
+            with open(path, encoding='utf-8') as fh:
+                for s in json.load(fh)['scenarios']:
+                    scenarios.append(dict(s, file=os.path.join(folder, s['file']),
+                                          custom=folder == CUSTOM_ROUTES))
+    if not scenarios:
+        sys.exit('No saved scenarios yet. Run: python run.py extract '
+                 '(and python ../custom_scenarios/make_routes.py for ours)')
+    return scenarios
 
 
 # --- extract --------------------------------------------------------------------
@@ -138,28 +157,31 @@ def cmd_extract(args):
         print('  %-20s %d' % (fam, counts[fam]))
 
 
+def families(scenarios):
+    return list(dict.fromkeys(s['family'] for s in scenarios))
+
+
 def cmd_list(args):
-    index = load_index()
-    for fam in FAMILIES:
-        rows = [s for s in index['scenarios'] if s['family'] == fam]
+    scenarios = load_index()
+    for fam in families(scenarios):
+        rows = [s for s in scenarios if s['family'] == fam]
         print('\n%s (%d)' % (fam, len(rows)))
         for s in rows:
             print('  %s' % s['name'])
 
 
-def select(target, index):
+def select(target, scenarios):
     """Scenarios for 'all', a family, or comma-separated route ids."""
-    scenarios = index['scenarios']
     if target == 'all':
         return scenarios
-    if target in FAMILIES:
+    if target in families(scenarios):
         return [s for s in scenarios if s['family'] == target]
     wanted = [t.strip() for t in target.split(',') if t.strip()]
     by_id = {s['id']: s for s in scenarios}
     missing = [w for w in wanted if w not in by_id]
     if missing or not wanted:
         sys.exit('Unknown: %s. Use all, a family (%s) or saved route ids (python run.py list).'
-                 % (', '.join(missing) or target, ', '.join(FAMILIES)))
+                 % (', '.join(missing) or target, ', '.join(families(scenarios))))
     return [by_id[w] for w in wanted]
 
 
@@ -179,6 +201,8 @@ def cmd_check(args):
     report(os.path.exists(os.path.join(b2d, 'leaderboard', 'leaderboard', 'autoagents', 'npc_agent.py')),
            'NpcAgent found')
     report(os.path.exists(INDEX), 'scenarios saved (python run.py extract)')
+    report(os.path.exists(os.path.join(CUSTOM_ROUTES, 'index.json')),
+           'pop-out-from-glare routes (python ../custom_scenarios/make_routes.py)', warn=True)
     if os.path.exists(evaluator):
         with open(evaluator, encoding='utf-8') as fh:
             fixed_gpu = 'graphicsadapter={int(4)}' in fh.read()
@@ -210,7 +234,26 @@ def cmd_check(args):
 
 # --- run -----------------------------------------------------------------------
 
-def leaderboard_env(args, b2d, carla, run_dir, route_file):
+def scenario_overlay(b2d):
+    """A scenario_runner root whose srunner/scenarios/ is Bench2Drive's plus ours.
+
+    The leaderboard finds scenario classes by importing every
+    $SCENARIO_RUNNER_ROOT/srunner/scenarios/*.py, so linking ours in beside
+    Bench2Drive's lets a route use them without editing Bench2Drive.
+    """
+    root = tempfile.mkdtemp(prefix='glare_srunner_')
+    folder = os.path.join(root, 'srunner', 'scenarios')
+    os.makedirs(folder)
+    source = os.path.join(b2d, 'scenario_runner', 'srunner', 'scenarios')
+    for name in os.listdir(source):
+        if name.endswith('.py'):
+            os.symlink(os.path.join(source, name), os.path.join(folder, name))
+    for name in CUSTOM_MODULES:
+        os.symlink(os.path.join(CUSTOM, name), os.path.join(folder, name))
+    return root
+
+
+def leaderboard_env(args, b2d, carla, run_dir, route_file, scenario_root):
     env = dict(os.environ)
     paths = [os.path.join(carla, 'PythonAPI'), os.path.join(carla, 'PythonAPI', 'carla'),
              b2d, os.path.join(b2d, 'leaderboard'), os.path.join(b2d, 'leaderboard', 'team_code'),
@@ -218,7 +261,7 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file):
     env['PYTHONPATH'] = os.pathsep.join(filter(None, [env.get('PYTHONPATH')] + paths))
     env.update({
         'CARLA_ROOT': carla,
-        'SCENARIO_RUNNER_ROOT': os.path.join(b2d, 'scenario_runner'),
+        'SCENARIO_RUNNER_ROOT': scenario_root,
         'LEADERBOARD_ROOT': os.path.join(b2d, 'leaderboard'),
         'CHALLENGE_TRACK_CODENAME': 'SENSORS',
         'IS_BENCH2DRIVE': 'True',
@@ -239,7 +282,9 @@ def run_one(args, b2d, carla, scenario, out_root):
     run_dir = os.path.join(out_root, '%s_glare%g_%s_%s' % (scenario['name'], args.glare,
                                                            args.headlights, stamp))
     os.makedirs(run_dir)
-    route_file = os.path.join(SCENARIOS, scenario['file'])
+    route_file = scenario['file']
+    overlay = scenario_overlay(b2d) if scenario.get('custom') else None
+    scenario_root = overlay or os.path.join(b2d, 'scenario_runner')
     cmd = [sys.executable, os.path.join('leaderboard', 'leaderboard', 'leaderboard_evaluator.py'),
            '--routes=%s' % route_file, '--repetitions=1', '--track=SENSORS',
            '--checkpoint=%s' % os.path.join(run_dir, 'results.json'),
@@ -250,12 +295,17 @@ def run_one(args, b2d, carla, scenario, out_root):
     print('\n=== %s' % os.path.basename(run_dir), flush=True)
     started = datetime.datetime.now().isoformat(timespec='seconds')
     with open(os.path.join(run_dir, 'run.log'), 'w', encoding='utf-8') as log:
-        proc = subprocess.Popen(cmd, cwd=b2d, env=leaderboard_env(args, b2d, carla, run_dir, route_file),
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in proc.stdout:          # show it live and keep it in run.log
-            sys.stdout.write(line)
-            log.write(line)
-        status = proc.wait()
+        try:
+            proc = subprocess.Popen(cmd, cwd=b2d,
+                                    env=leaderboard_env(args, b2d, carla, run_dir, route_file, scenario_root),
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:          # show it live and keep it in run.log
+                sys.stdout.write(line)
+                log.write(line)
+            status = proc.wait()
+        finally:
+            if overlay:
+                shutil.rmtree(overlay, ignore_errors=True)
     with open(os.path.join(run_dir, 'run_info.json'), 'w', encoding='utf-8') as fh:
         json.dump(dict(scenario, glare_level=args.glare, headlights=args.headlights,
                        driver=args.driver, started=started,
@@ -372,7 +422,7 @@ def main():
     sub.add_parser('list', help='list the saved scenarios')
     sub.add_parser('check', parents=[paths], help='check that this machine can run them')
     r = sub.add_parser('run', parents=[paths], help='run scenarios, one leaderboard call each')
-    r.add_argument('target', help='all, a family, or route ids like 3410,3436')
+    r.add_argument('target', help='all, a family (glare_popout for ours), or route ids like 3410,3436')
     r.add_argument('--glare', type=float, default=1.0, help='glare level, 0 to 2 (default 1.0)')
     r.add_argument('--out', help='output folder (default $GLARE_OUT or ~/glare_runs)')
     r.add_argument('--headlights', choices=['low', 'high', 'scene'], default='low',

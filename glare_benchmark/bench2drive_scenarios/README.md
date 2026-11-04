@@ -106,6 +106,16 @@ still sees the oncoming traffic while it waits.
 
 Run inside `tmux` over SSH so a dropped connection does not stop a route.
 
+## Our pop-out-from-glare scenarios
+
+`run.py` also runs the scenarios in `../custom_scenarios` (family
+`glare_popout`), once `python ../custom_scenarios/make_routes.py` has written
+their routes. See that README.
+
+```bash
+python run.py run glare_popout --glare 1.0 --headlights scene
+```
+
 ## Copy the videos to your Mac
 
 On the Mac; copies each run's video and the summary, keeping folder names:
