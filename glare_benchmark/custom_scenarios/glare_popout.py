@@ -374,12 +374,14 @@ class OncomingOvertaker(AtomicBehavior):
 
     It starts behind the lead and closes in, its speed set every tick so that it
     is `pull_out_gap` metres behind the lead (inside its glare, seen from the
-    ego) when the ego is `swing_dist` away. Then it pulls out into the ego's
+    ego) when the ego is `swing_dist` away; if it gets there first it follows
+    the lead at that gap. Only then, however slow the ego, it pulls out into the ego's
     lane at `pass_speed`, already moving faster than the lead, as a real
     overtake does. With pull_back 'lead' it pulls back into its own lane
     `return_gap` metres ahead of the lead, or at once if it is already past
     the ego. With 'ego' it stays in the ego's lane, head-on, until it is past
-    the ego. Never finishes on its own.
+    the ego: its plan runs past the ego, so it reaches it even if the ego
+    stops. Never finishes on its own.
     """
 
     CHANGE_M = 10.0      # metres travelled while changing lane
@@ -408,15 +410,15 @@ class OncomingOvertaker(AtomicBehavior):
     def _here(self):
         return self._map.get_waypoint(CarlaDataProvider.get_location(self._actor))
 
-    def _change_lane(self, into_ego_lane):
-        """Plan from here into the other lane, then 120 m along it in this car's direction."""
+    def _change_lane(self, into_ego_lane, length=120.0):
+        """Plan from here into the other lane, then `length` m along it in this car's direction."""
         here = self._here()
         if into_ego_lane:
             target = along(here, self.CHANGE_M).get_left_lane()      # oncoming lane's left = ego lane
             if target is None:
                 return
             plan = [target]
-            for _ in range(60):                                     # the ego lane runs the other way
+            for _ in range(int(length / 2.0)):                      # the ego lane runs the other way
                 found = plan[-1].previous(2.0)
                 if not found:
                     break
@@ -442,9 +444,11 @@ class OncomingOvertaker(AtomicBehavior):
         if self._phase == 'approach':
             gap = -ahead - lengths                  # bumper to bumper, behind the lead
             ego_dist = loc.distance(ego_loc)
-            if gap <= self._pull_out_gap or ego_dist <= self._swing_dist:
+            if ego_dist <= self._swing_dist:
                 self._phase = 'pass'
-                self._change_lane(into_ego_lane=True)
+                # Head-on, the plan must reach past the ego: a planner stops where its plan ends.
+                length = ego_dist + 60.0 if self._pull_back == 'ego' else 120.0
+                self._change_lane(into_ego_lane=True, length=max(length, 120.0))
                 log_event('overtake_swing', ego_dist=round(ego_dist, 1), lead_gap=round(gap, 1),
                           lead_to_ego=round(lead_loc.distance(ego_loc), 1),
                           speed=round(CarlaDataProvider.get_velocity(self._actor), 1))
@@ -454,8 +458,11 @@ class OncomingOvertaker(AtomicBehavior):
                 closing = (max(CarlaDataProvider.get_velocity(self._ego), 4.0)
                            + max(CarlaDataProvider.get_velocity(self._actor), lead_speed))
                 seconds = max(ego_dist - self._swing_dist, 1.0) / closing
-                speed = min(max(lead_speed + (gap - self._pull_out_gap) / seconds, lead_speed),
-                            self._pass_speed)
+                if gap > self._pull_out_gap:
+                    speed = min(max(lead_speed + (gap - self._pull_out_gap) / seconds, lead_speed),
+                                self._pass_speed)
+                else:                               # caught up early: follow the lead at the gap
+                    speed = max(lead_speed + (gap - self._pull_out_gap), 0.0)
         elif self._phase == 'pass':
             speed = self._pass_speed
             past_ego = self._s_of(loc) < self._s_of(ego_loc)

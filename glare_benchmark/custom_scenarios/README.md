@@ -72,9 +72,12 @@ up to 15 m/s, and pulls back in once past. An ego that brakes keeps about
 **Head-on (`OvertakeHeadOn`, `OvertakeHeadOnMoto`).** The same, but the
 overtaker pulls out later, at 55 m (the lead is then about 45 m away), and
 stays in the ego's lane until it is past the ego (`pull_back="ego"`): a
-head-on course. It does not bail out, so an ego that stays in its lane hits
-it, about 2–2.8 s after the swing at ego speeds of 5–8 m/s. Braking alone
-does not avoid it. A late bail-out is planned for when DeepSight drives.
+head-on course. It pulls out only once the ego is that close: if it catches
+up with the lead sooner (a slow ego), it follows the lead 5 m behind until
+then. It does not bail out, and its path runs past the ego, so it hits an
+ego that stays in its lane, even one that brakes to a stop: about 2.7–4.5 s
+after the swing at ego speeds of 2–8 m/s in the offline sim. A late bail-out
+is planned for when DeepSight drives.
 
 Seen from the ego, perspective puts the follower's inner headlamp just beside
 the lead's inner lamp while it follows. In the offline sim at
