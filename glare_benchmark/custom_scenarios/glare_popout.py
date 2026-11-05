@@ -5,12 +5,20 @@ car is the glare source, timed so the hazard appears beside or behind its
 headlamps as seen from the ego's front camera:
 
 GlarePedestrianPopOut
-    A pedestrian (or cyclist) waits on the centre line, or on the far
-    sidewalk, at the meet point M. A lit oncoming car is driven so that it is
-    `gap` metres in front of M (between the ego and the pedestrian) when the
-    ego is `ped_start` metres from M. At that moment the pedestrian walks into
-    the ego's lane, from right behind the car's headlamps: the geometry
-    carla_script_closed_loop.py stages for its cyclist.
+    A lit oncoming car drives toward the ego. When it is `release_dist` metres
+    from the ego, a pedestrian (or cyclist) appears just behind its rear
+    bumper, right beside its flank (between the car and the centre line), and
+    walks into the ego's lane. Seen from CAM_FRONT the pedestrian starts next
+    to the car's inner headlamp, inside its glare, and walks out of it.
+
+    The glare only takes a pedestrian's contrast away within ~40 px of a lamp
+    (measured with glare(): contrast against the local brightness drops to
+    0.2-0.6 there, and is nearly back by 80 px). The pedestrian is that close
+    to the lamp only while the car is 25-40 m away; nearer, the lamps sweep to
+    the edge of the image. Hence release_dist 30 and a start tight against the
+    car. The release follows the car, not the ego, so it lines up at any ego
+    speed. The clean frame shows the pedestrian throughout; only the glare
+    hides them.
 
 GlareOncomingOvertake
     A slow lit oncoming car with a second car close behind it, hidden in its
@@ -20,12 +28,14 @@ GlareOncomingOvertake
 The oncoming cars drive a fixed plan with their own headlights on (low or
 high beams), so they glare under any --headlights mode, and the role name
 'scenario no lights' keeps Bench2Drive's lights behaviour from switching them
-off. With glare 0 the same run is the clean baseline: any change in the ego's
-behaviour is the glare's doing.
+off. With street_lights="off" the street lights along the stretch stay off
+(Bench2Drive switches them on near the ego at night), so the road is lit only
+by headlights. With glare 0 the same run is the clean baseline: any change in
+the ego's behaviour is the glare's doing.
 
 Every parameter can be set in the route file, as Bench2Drive's scenarios do
-(<ped_start value="30"/>); custom_scenarios/make_routes.py writes route files
-with all of them. Each timing moment (pop-out start, in the ego's lane,
+(<release_dist value="20"/>); custom_scenarios/make_routes.py writes route
+files with all of them. Each timing moment (pop-out start, in the ego's lane,
 overtake swing and return) is appended to $GLARE_OUTPUT/scenario_events.jsonl
 with its CARLA frame, which matches meta/<step>.json of the run.
 
@@ -45,18 +55,15 @@ from agents.navigation.local_planner import LocalPlanner, RoadOption
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (ActorDestroy,
-                                                                      ActorTransformSetter,
                                                                       AtomicBehavior,
                                                                       Idle,
                                                                       KeepVelocity,
                                                                       MovePedestrianWithEgo)
 from srunner.scenariomanager.scenarioatomics.atomic_criteria import CollisionTest
 from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (DriveDistance,
-                                                                               InTriggerDistanceToLocation)
+                                                                               InTriggerDistanceToVehicle)
 from srunner.scenarios.basic_scenario import BasicScenario
-from srunner.tools.background_manager import (ChangeOppositeBehavior,
-                                              LeaveCrossingSpace,
-                                              LeaveSpaceInFront)
+from srunner.tools.background_manager import ChangeOppositeBehavior, LeaveSpaceInFront
 
 BEAMS = {
     'low': carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam,
@@ -68,6 +75,9 @@ BEAMS = {
 ROLE = 'scenario no lights'
 CAR_MODEL = 'vehicle.lincoln.mkz_2017'   # the oncoming model of carla_script_closed_loop.py
 BICYCLE_MODEL = 'vehicle.diamondback.century'
+# street_lights="off" darkens every street light this close to the meet point,
+# which covers the whole stretch make_routes.py picks.
+DARK_RADIUS_M = 130.0
 
 
 def get_value_parameter(config, name, p_type, default):
@@ -142,25 +152,16 @@ class LogEvent(AtomicBehavior):
 
 
 class OncomingCar(AtomicBehavior):
-    """Drives a lit car down its plan, toward the ego, and keeps its headlights on.
+    """Drives a lit car down its plan at `speed` m/s and keeps its headlights on.
 
-    Road position s is metres along the ego's direction from the meet point
-    (`s_of`): the ego starts at s < 0, the oncoming car at s > 0. With
-    `meet=(car_s, ego_s)` the car's speed is set every tick so that it reaches
-    car_s when the ego reaches ego_s, whatever speed the ego drives; once there
-    (or with meet=None) it cruises. Never finishes on its own.
+    Never finishes on its own.
     """
 
-    def __init__(self, actor, plan, ego, s_of, cruise, lights, meet=None,
-                 speed_range=(2.0, 16.0), name='OncomingCar'):
+    def __init__(self, actor, plan, speed, lights, name='OncomingCar'):
         super().__init__(name, actor)
         self._plan = plan
-        self._ego = ego
-        self._s_of = s_of
-        self._cruise = cruise
+        self._speed = speed
         self._lights = lights
-        self._meet = meet
-        self._speed_range = speed_range
         self._planner = None
 
     def initialise(self):
@@ -168,25 +169,68 @@ class OncomingCar(AtomicBehavior):
         self._planner.set_global_plan(self._plan)
         super().initialise()
 
-    def _speed(self):
-        if self._meet is None:
-            return self._cruise
-        car_s, ego_s = self._meet
-        car_left = self._s_of(CarlaDataProvider.get_location(self._actor)) - car_s
-        ego_left = ego_s - self._s_of(CarlaDataProvider.get_location(self._ego))
-        if car_left <= 0.0 or ego_left <= 0.0:
-            log_event('oncoming_meet', car_s=round(car_s + car_left, 1), ego_s=round(ego_s - ego_left, 1))
-            self._meet = None
-            return self._cruise
-        # A standing ego is assumed to pull away; the next ticks correct for it.
-        seconds = ego_left / max(CarlaDataProvider.get_velocity(self._ego), 4.0)
-        return min(max(car_left / seconds, self._speed_range[0]), self._speed_range[1])
-
     def update(self):
         self._actor.set_light_state(carla.VehicleLightState(self._lights))
-        self._planner.set_speed(self._speed() * 3.6)
+        self._planner.set_speed(self._speed * 3.6)
         self._actor.apply_control(self._planner.run_step())
         return py_trees.common.Status.RUNNING
+
+
+class StreetLightsOff(AtomicBehavior):
+    """Keeps the street lights near `location` off. Never finishes on its own.
+
+    Bench2Drive's RouteLightsBehavior switches on, every tick, the street
+    lights near the ego at night. It ticks before the scenarios do, so
+    switching them off again every tick wins for the frame that gets rendered.
+    """
+
+    def __init__(self, location, radius, name='StreetLightsOff'):
+        super().__init__(name)
+        self._location = location
+        self._radius = radius
+        self._manager = None
+        self._lights = []
+
+    def initialise(self):
+        self._manager = CarlaDataProvider.get_world().get_lightmanager()
+        self._lights = [light for light in self._manager.get_all_lights(carla.LightGroup.Street)
+                        if light.location.distance(self._location) < self._radius]
+        log_event('street_lights_off', lights=len(self._lights), radius_m=self._radius)
+        super().initialise()
+
+    def update(self):
+        if self._lights:
+            self._manager.turn_off(self._lights)
+        return py_trees.common.Status.RUNNING
+
+
+class PlaceBehindCar(AtomicBehavior):
+    """Puts the hidden adversary just behind `car`, facing across the ego's lane, then succeeds.
+
+    `place(car_location)` gives the transform. Physics comes back on once the
+    adversary is there, as Bench2Drive's ActorTransformSetter does.
+    """
+
+    def __init__(self, actor, car, place, name='PlaceBehindCar'):
+        super().__init__(name, actor)
+        self._car = car
+        self._place = place
+        self._transform = None
+
+    def initialise(self):
+        self._transform = self._place(CarlaDataProvider.get_location(self._car))
+        self._actor.set_target_velocity(carla.Vector3D(0, 0, 0))
+        self._actor.set_target_angular_velocity(carla.Vector3D(0, 0, 0))
+        self._actor.set_transform(self._transform)
+        super().initialise()
+
+    def update(self):
+        location = CarlaDataProvider.get_location(self._actor)
+        if location is None or location.distance(self._transform.location) > 1.0:
+            self._actor.set_transform(self._transform)
+            return py_trees.common.Status.RUNNING
+        self._actor.set_simulate_physics(True)
+        return py_trees.common.Status.SUCCESS
 
 
 class OncomingOvertaker(AtomicBehavior):
@@ -304,6 +348,9 @@ class _GlareScenario(BasicScenario):
         if beams not in BEAMS:
             raise ValueError("'beams' must be 'low' or 'high', not %r" % beams)
         self._lights = BEAMS[beams]
+        self._street_lights = get_value_parameter(config, 'street_lights', str, 'on')
+        if self._street_lights not in ('on', 'off'):
+            raise ValueError("'street_lights' must be 'on' or 'off', not %r" % self._street_lights)
         self.timeout = timeout
         super().__init__(name, ego_vehicles, config, world, debug_mode, criteria_enable=criteria_enable)
 
@@ -331,6 +378,11 @@ class _GlareScenario(BasicScenario):
         """The oncoming lane from s to 60 m behind the trigger point."""
         return lane_plan(self._oncoming_at(s), s + self._distance + 60.0)
 
+    def _add_street_lights(self, parallel):
+        """With street_lights="off", keep the stretch's street lights off while `parallel` runs."""
+        if self._street_lights == 'off':
+            parallel.add_child(StreetLightsOff(self._meet_wp.transform.location, DARK_RADIUS_M))
+
     def _create_test_criteria(self):
         if self.route_mode:
             return []
@@ -341,99 +393,88 @@ class _GlareScenario(BasicScenario):
 
 
 class GlarePedestrianPopOut(_GlareScenario):
-    """A pedestrian or cyclist steps into the ego's lane from right behind an oncoming car's headlamps.
+    """A pedestrian or cyclist steps into the ego's lane from just behind an oncoming car, inside its glare.
 
     Parameters (route file, all optional):
-        distance    trigger point to the meet point M, m (90)
-        ped_start   the ego's distance to M when the adversary moves, m (30)
-        gap         how far in front of M the car is at that moment, m (4)
-        car_ahead   where the car waits, m past M (35)
-        cruise      the car's speed after the meet, m/s (9)
-        adversary   'walker' or 'bicycle' (walker)
-        start       'line' (centre line, beside the passing car) or 'curb' (far sidewalk) (line)
-        speed       the adversary's speed, m/s (1.4 walker, 3.0 bicycle)
-        hold        seconds a walker stands in the ego's lane before walking on (3)
-        beams       the car's 'low' or 'high' beams (low)
+        distance       trigger point to the meet point M, m (90)
+        car_ahead      where the car waits, m past M (35)
+        car_speed      the car's speed, m/s (9)
+        release_dist   the car's distance to the ego when the adversary appears, m (30)
+        behind         how far behind the car's rear bumper it appears, m (0.5)
+        ped_offset     how far past the centre line, toward the car, it appears, m
+                       ('auto': 0.15 m clear of the car's flank)
+        adversary      'walker' or 'bicycle' (walker)
+        speed          the adversary's speed, m/s (1.8 walker, 3.0 bicycle)
+        hold           seconds a walker stands in the ego's lane before walking on (3)
+        street_lights  'on' (Bench2Drive's) or 'off' along the stretch (on)
+        beams          the car's 'low' or 'high' beams (low)
     """
 
     def __init__(self, world, ego_vehicles, config, randomize=False, debug_mode=False,
                  criteria_enable=True, timeout=60):
-        self._ped_start = get_value_parameter(config, 'ped_start', float, 30.0)
-        self._gap = get_value_parameter(config, 'gap', float, 4.0)
         self._car_ahead = get_value_parameter(config, 'car_ahead', float, 35.0)
-        self._cruise = get_value_parameter(config, 'cruise', float, 9.0)
+        self._car_speed = get_value_parameter(config, 'car_speed', float, 9.0)
+        self._release_dist = get_value_parameter(config, 'release_dist', float, 30.0)
+        self._behind = get_value_parameter(config, 'behind', float, 0.5)
+        self._ped_offset = get_value_parameter(config, 'ped_offset', str, 'auto')
         self._kind = get_value_parameter(config, 'adversary', str, 'walker')
-        self._start = get_value_parameter(config, 'start', str, 'line')
-        self._speed = get_value_parameter(config, 'speed', float, 1.4 if self._kind == 'walker' else 3.0)
+        self._speed = get_value_parameter(config, 'speed', float, 1.8 if self._kind == 'walker' else 3.0)
         self._hold = get_value_parameter(config, 'hold', float, 3.0)
         if self._kind not in ('walker', 'bicycle'):
             raise ValueError("'adversary' must be 'walker' or 'bicycle', not %r" % self._kind)
-        if self._start not in ('line', 'curb'):
-            raise ValueError("'start' must be 'line' or 'curb', not %r" % self._start)
         super().__init__('GlarePedestrianPopOut', world, ego_vehicles, config, debug_mode,
                          criteria_enable, timeout)
 
-    def _crossing(self):
-        """Where the adversary waits, facing the ego's lane, and how far it walks to the lane centre and then off the road."""
-        meet = self._meet_wp.transform
-        right = meet.get_right_vector()          # from the oncoming side into the ego's lane
-        if self._start == 'line':
-            to_line = self._meet_wp.lane_width / 2.0
-            origin = meet.location - carla.Location(x=right.x * to_line, y=right.y * to_line)
-            to_centre = to_line
-        else:
-            side = self._oncoming_wp.get_right_lane()   # the oncoming lane's right = the far edge
-            if side is not None and side.lane_type == carla.LaneType.Sidewalk:
-                origin = side.transform.location
-            else:
-                out = self._meet_wp.lane_width / 2.0 + self._oncoming_wp.lane_width + 1.0
-                origin = meet.location - carla.Location(x=right.x * out, y=right.y * out)
-            to_centre = math.hypot(origin.x - meet.location.x, origin.y - meet.location.y)
-        origin.z = meet.location.z + (1.0 if self._kind == 'walker' else 0.3)
-        yaw = math.degrees(math.atan2(right.y, right.x))
-        beyond = self._meet_wp.lane_width / 2.0 + 2.0     # from the lane centre off the road
-        return carla.Transform(origin, carla.Rotation(yaw=yaw)), to_centre, beyond
+    def _lateral(self):
+        """The adversary's start, in metres left of the ego lane's centre (toward the car)."""
+        to_line = self._meet_wp.lane_width / 2.0
+        if self._ped_offset != 'auto':
+            return to_line + float(self._ped_offset)
+        flank = to_line + self._oncoming_wp.lane_width / 2.0 - self._car.bounding_box.extent.y
+        return max(flank - 0.15, to_line)
+
+    def _place(self, car_location):
+        """Where the adversary appears, given the car's location: behind it, facing the ego's lane."""
+        s = self._s(car_location) + self._car.bounding_box.extent.x + self._behind
+        lane = along(self._meet_wp, s).transform              # the ego's lane, beside that spot
+        right = lane.get_right_vector()                       # from the car's side into the ego's lane
+        left = self._lateral()
+        location = carla.Location(x=lane.location.x - right.x * left, y=lane.location.y - right.y * left,
+                                  z=lane.location.z + (1.0 if self._kind == 'walker' else 0.3))
+        return carla.Transform(location, carla.Rotation(yaw=math.degrees(math.atan2(right.y, right.x))))
 
     def _initialize_actors(self, config):
         self._car, self._car_s = self._spawn_car(self._car_ahead, CAR_MODEL)
-        self._wait_tf, self._to_centre, self._beyond = self._crossing()
-
+        # Spawn the adversary once at a spot like the one it will appear at, to
+        # check it can stand there, then hide it until the release.
+        first = self._place(self._oncoming_at(-self._release_dist).transform.location)
         model = 'walker.pedestrian.*' if self._kind == 'walker' else BICYCLE_MODEL
-        adversary = CarlaDataProvider.request_new_actor(model, self._wait_tf, rolename=ROLE)
+        adversary = CarlaDataProvider.request_new_actor(model, first, rolename=ROLE)
         if adversary is None:
-            raise ValueError('could not spawn the %s at %s' % (self._kind, self._wait_tf.location))
+            raise ValueError('could not spawn the %s at %s' % (self._kind, first.location))
         if self._kind == 'walker':
             # Bench2Drive's fix for walkers on large maps (DynamicObjectCrossing):
-            # respawn it under the ego and keep it there until the scenario starts.
+            # respawn it under the ego and keep it there until it appears.
             type_id = adversary.type_id
             adversary.destroy()
             hidden = self.ego_vehicles[0].get_transform()
             hidden.location.z -= 50
-            adversary = CarlaDataProvider.request_new_actor(type_id, hidden)
+            adversary = CarlaDataProvider.request_new_actor(type_id, hidden, rolename=ROLE)
             if adversary is None:
                 raise ValueError("couldn't spawn the walker substitute")
         else:
-            hidden = carla.Transform(self._wait_tf.location + carla.Location(z=-200), self._wait_tf.rotation)
-            adversary.set_transform(hidden)
+            adversary.set_transform(carla.Transform(first.location + carla.Location(z=-200), first.rotation))
         adversary.set_simulate_physics(False)
         self._adversary = adversary
         self.other_actors += [self._adversary, self._car]
 
-    def _setup_scenario_trigger(self, config):
-        trigger = super()._setup_scenario_trigger(config)
-        if not self.route_mode or self._kind != 'walker':
-            return trigger
-        parallel = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
-                                                name='ScenarioTrigger')
-        parallel.add_child(MovePedestrianWithEgo(self.ego_vehicles[0], self._adversary, 100))
-        parallel.add_child(trigger)
-        return parallel
-
     def _state(self):
         ego = CarlaDataProvider.get_location(self.ego_vehicles[0])
         car = CarlaDataProvider.get_location(self._car)
-        return {'ego_s': round(self._s(ego), 1), 'car_s': round(self._s(car), 1),
-                'car_to_ego_m': round(car.distance(ego), 1)}
+        adversary = CarlaDataProvider.get_location(self._adversary)
+        return {'car_to_ego_m': round(car.distance(ego), 1),
+                'adversary_to_ego_m': round(adversary.distance(ego), 1),
+                'ego_speed_ms': round(CarlaDataProvider.get_velocity(self.ego_vehicles[0]), 1)}
 
     def _create_behavior(self):
         ego = self.ego_vehicles[0]
@@ -441,29 +482,37 @@ class GlarePedestrianPopOut(_GlareScenario):
         if self.route_mode:
             root.add_child(LeaveSpaceInFront(self._distance + 20.0))
             root.add_child(ChangeOppositeBehavior(active=False))
-        root.add_child(ActorTransformSetter(self._adversary, self._wait_tf, True))
 
         main = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
                                             name='PopOutOfGlare')
-        main.add_child(OncomingCar(self._car, self._car_plan(self._car_s), ego, self._s, self._cruise,
-                                   self._lights, meet=(-self._gap, -self._ped_start)))
+        main.add_child(OncomingCar(self._car, self._car_plan(self._car_s), self._car_speed, self._lights))
+        self._add_street_lights(main)
 
+        # Hidden until the car is close; walkers are kept under the ego meanwhile.
+        release = InTriggerDistanceToVehicle(self._car, ego, self._release_dist)
+        if self.route_mode and self._kind == 'walker':
+            wait = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
+                                                name='WaitForCar')
+            wait.add_child(MovePedestrianWithEgo(ego, self._adversary, 100))
+            wait.add_child(release)
+            release = wait
+
+        to_centre = self._lateral()
+        off_road = self._meet_wp.lane_width / 2.0 + 2.0
         popout = py_trees.composites.Sequence(name='Adversary')
-        popout.add_child(InTriggerDistanceToLocation(ego, self._meet_wp.transform.location, self._ped_start))
-        if self.route_mode:
-            popout.add_child(LeaveCrossingSpace(self._meet_wp))
+        popout.add_child(release)
+        popout.add_child(PlaceBehindCar(self._adversary, self._car, self._place))
         popout.add_child(LogEvent('popout_start', self._state))
-        bicycle = self._kind == 'bicycle'
-        if bicycle:      # a cyclist rides straight across
+        if self._kind == 'bicycle':      # a cyclist rides straight across
             popout.add_child(KeepVelocity(self._adversary, self._speed, force_speed=True,
-                                          distance=self._to_centre + self._beyond))
-        else:            # a walker stops in the ego's lane, then walks on off the road
-            popout.add_child(KeepVelocity(self._adversary, self._speed, distance=self._to_centre))
+                                          distance=to_centre + off_road))
+        else:                            # a walker stops in the ego's lane, then walks off the road
+            popout.add_child(KeepVelocity(self._adversary, self._speed, distance=to_centre))
             popout.add_child(LogEvent('popout_in_lane', self._state))
             popout.add_child(Idle(self._hold))
-            popout.add_child(KeepVelocity(self._adversary, self._speed, distance=self._beyond))
+            popout.add_child(KeepVelocity(self._adversary, self._speed, distance=off_road))
         popout.add_child(LogEvent('popout_clear', self._state))
-        popout.add_child(DriveDistance(ego, self._ped_start + 15.0))
+        popout.add_child(DriveDistance(ego, 40.0))
         main.add_child(popout)
         root.add_child(main)
 
@@ -486,6 +535,7 @@ class GlareOncomingOvertake(_GlareScenario):
         swing_dist    the ego's distance to the overtaker at that moment, m (75)
         pass_speed    the overtaker's top speed, m/s (15)
         return_gap    how far past the lead it pulls back in, m (3)
+        street_lights 'on' (Bench2Drive's) or 'off' along the stretch (on)
         beams         both cars' 'low' or 'high' beams (low)
     """
 
@@ -518,12 +568,12 @@ class GlareOncomingOvertake(_GlareScenario):
 
         main = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
                                             name='OvertakeOutOfGlare')
-        main.add_child(OncomingCar(self._lead, self._car_plan(self._lead_s), ego, self._s,
-                                   self._lead_speed, self._lights))
+        main.add_child(OncomingCar(self._lead, self._car_plan(self._lead_s), self._lead_speed, self._lights))
         main.add_child(OncomingOvertaker(self._overtaker, self._lead, ego, self._s, self._pull_out_gap,
                                          self._swing_dist, self._pass_speed, self._return_gap,
                                          self._lights))
         main.add_child(DriveDistance(ego, self._distance + 30.0))     # ends once the ego is past M
+        self._add_street_lights(main)
         root.add_child(main)
 
         if self.route_mode:

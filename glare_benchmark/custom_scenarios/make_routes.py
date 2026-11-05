@@ -8,9 +8,9 @@ Run on the Ubuntu machine, from the conda env with the CARLA 0.9.15 Python API:
 No CARLA server is needed: each town's OpenDRIVE file is read straight from
 $CARLA_ROOT. A spot is a straight stretch of two-way road, one lane each way,
 with no junction for the whole scenario. Each spot gets one route per
-scenario, at the same place, so they compare like for like. Routes go to
-routes/glare_popout/<id>_<scenario>_<town>.xml plus routes/index.json, which
-bench2drive_scenarios/run.py reads:
+variant (VARIANTS), at the same place, so they compare like for like. Routes
+go to routes/glare_popout/<id>_<variant>_<town>.xml plus routes/index.json,
+which bench2drive_scenarios/run.py reads:
 
     python run.py run glare_popout --glare 1.0 --headlights scene
 
@@ -30,18 +30,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROUTES = os.path.join(HERE, 'routes')
 FAMILY = 'glare_popout'
 
-# Scenario type: (first route id, parameters written into its route files).
+PEDESTRIAN = {'distance': 90, 'car_ahead': 35, 'car_speed': 9, 'release_dist': 30, 'behind': 0.5,
+              'ped_offset': 'auto', 'adversary': 'walker', 'speed': 1.8, 'hold': 3, 'beams': 'low'}
+
+# Variant name: (scenario type, first route id, parameters written into its route files).
 # Ids start at 91000 so they never clash with Bench2Drive's.
-SCENARIOS = {
-    'GlarePedestrianPopOut': (91000, {
-        'distance': 90, 'ped_start': 30, 'gap': 4, 'car_ahead': 35, 'cruise': 9,
-        'adversary': 'walker', 'start': 'line', 'speed': 1.4, 'hold': 3, 'beams': 'low'}),
-    'GlareOncomingOvertake': (92000, {
+VARIANTS = {
+    # Street lights off: lit only by headlights, the hard case.
+    'PedestrianDark': ('GlarePedestrianPopOut', 91000, dict(PEDESTRIAN, street_lights='off')),
+    'Overtake': ('GlareOncomingOvertake', 92000, {
         'distance': 60, 'lead_ahead': 50, 'lead_speed': 5, 'catch_gap': 25, 'pull_out_gap': 5,
-        'swing_dist': 75, 'pass_speed': 15, 'return_gap': 3, 'beams': 'low'}),
+        'swing_dist': 75, 'pass_speed': 15, 'return_gap': 3, 'street_lights': 'on', 'beams': 'low'}),
+    # Bench2Drive's street lights: the pedestrian is lit from above, the easier case.
+    'PedestrianLit': ('GlarePedestrianPopOut', 93000, dict(PEDESTRIAN, street_lights='on')),
 }
 LEAD_IN_M = 30.0      # route before the trigger point, so the ego is up to speed
-BEFORE_M = LEAD_IN_M + max(p['distance'] for _, p in SCENARIOS.values())   # route start to M
+BEFORE_M = LEAD_IN_M + max(p['distance'] for _, _, p in VARIANTS.values())   # route start to M
 AFTER_M = 80.0        # M to the route end; also room for the oncoming cars to wait
 MAX_TURN_DEG = 8.0    # how much the road may bend over the whole stretch
 MIN_SPACING_M = 250.0 # between two spots in one town
@@ -174,14 +178,14 @@ def main():
         for spot in spots:
             k += 1
             meet = spot['meet'].transform.location
-            for scenario, (first_id, params) in SCENARIOS.items():
+            for variant, (scenario, first_id, params) in VARIANTS.items():
                 route_id = first_id + k
-                name = '%d_%s_%s' % (route_id, scenario, town)
+                name = '%d_%s_%s' % (route_id, variant, town)
                 path = os.path.join(out, name + '.xml')
                 route_xml(route_id, town, scenario, params, spot).write(
                     path, encoding='utf-8', xml_declaration=True)
                 saved.append({'id': str(route_id), 'name': name, 'family': FAMILY, 'scenario': scenario,
-                              'town': town, 'file': os.path.relpath(path, ROUTES),
+                              'variant': variant, 'town': town, 'file': os.path.relpath(path, ROUTES),
                               'meet': [round(meet.x, 1), round(meet.y, 1)], 'sidewalk': spot['sidewalk']})
                 print('   %s  M at (%.0f, %.0f)%s' % (name, meet.x, meet.y,
                                                        '' if spot['sidewalk'] else '  no sidewalk'))
