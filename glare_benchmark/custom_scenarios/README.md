@@ -40,16 +40,18 @@ hides them appearing, and darkness (`PedestrianDark`) hides them stepping
 out. Every frame is labelled (below), so the dataset records exactly which
 frames hide them.
 
-**Two cars (`PedestrianTwoCarsDark`).** A second lit car starts 30 m behind
+**Two cars (`PedestrianTwoCarsDark`).** A second lit car starts 24 m behind
 the first. Once the pedestrian is in place, its speed is set every tick so
-that, as they step out, it is where its inner headlamp lines up with them
-halfway across: about 35 m from an ego at 8 m/s, 20 m at 4 m/s. Its glare
-then covers the step-out itself. In the offline sim, at `--glare-size 2`, the
-pedestrian is inside that glare for 0.4–0.6 s of their 1.1 s crossing, at
-ego speeds of 4–10 m/s, and still stops 0.4 s before impact. For about 0.2 s
-mid-crossing they stand in front of that inner lamp. The injector then skips
-that lamp's glare (a covered lamp does not glare), and the outer lamp still
-glares.
+that its inner headlamp lines up with them a quarter of the way across
+(`line_up` 0.25). That keeps it just a few metres behind the pedestrian as
+they step out: about 6 m at an ego speed of 8 m/s, 3 m at 4 m/s, never under
+2 m. Its glare covers the wait and the step-out itself. In the offline sim, at
+`--glare-size 2` and ego speeds of 3–12 m/s, the pedestrian is inside that
+glare for 1–8 s while waiting and 0.4–0.6 s of their 1.1 s crossing, and
+still stops 0.4 s before impact. A lower `line_up` brings the car closer
+still. For a moment mid-crossing they stand in front of the inner lamp. The
+injector then skips that lamp's glare (a covered lamp does not glare), and
+the outer lamp still glares.
 
 **Bigger glare.** `python run.py run ... --glare-size 2` makes every part of
 the glare twice as large: the zone where a pedestrian keeps under half their
@@ -74,7 +76,7 @@ Variants are route-file parameters, no code changes needed:
 | `behind`, `ped_offset` | pedestrian | 0.5 m, `auto` (0.15 m clear of the car's side) | where they appear |
 | `speed`, `arrive_before` | pedestrian | 2.5 m/s, 0.5 s | how fast they cross; how long before impact they stop in the ego's lane |
 | `hold`, `car_speed` | pedestrian | 3 s, 9 m/s | |
-| `second_gap`, `second_dist` | pedestrian | 0 (none), `auto` | a second lit car this far behind the first; its distance to the ego at the step-out |
+| `second_gap`, `second_dist`, `line_up` | pedestrian | 0 (none), `auto`, 0.25 | a second lit car this far behind the first; its distance to the ego at the step-out; how far across the pedestrian is when its lamp lines up with them (lower = closer behind them) |
 | `street_lights` | both | `on` | `off`: no street lights along the stretch, lit only by headlights |
 | `lead_speed`, `pass_speed` | overtake | 5, 15 m/s | |
 | `swing_dist`, `pull_out_gap`, `catch_gap`, `return_gap` | overtake | 75, 5, 25, 3 m | |

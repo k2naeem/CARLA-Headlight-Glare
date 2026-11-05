@@ -23,10 +23,10 @@ GlarePedestrianPopOut
     hides them. A larger glare (run.py --glare-size 2) widens that zone to
     ~80 px at 25 m.
 
-    With second_gap > 0 a second lit car follows the first. It is timed to be
-    where its inner lamp lines up with the pedestrian halfway across as they
-    step out, so its glare covers the step-out itself, which the first car,
-    by then beside the ego, cannot.
+    With second_gap > 0 a second lit car follows the first. It is timed so
+    its inner lamp lines up with the pedestrian a quarter of the way across
+    (line_up), a few metres behind them, so its glare covers the wait and the
+    step-out itself, which the first car, by then beside the ego, cannot.
 
 GlareOncomingOvertake
     A slow lit oncoming car with a second car close behind it, hidden in its
@@ -197,7 +197,7 @@ class TimedOncomingCar(OncomingCar):
     """
 
     def __init__(self, actor, plan, speed, lights, ego, target_dist, seconds_left,
-                 speed_range=(3.0, 15.0), name='TimedOncomingCar'):
+                 speed_range=(2.0, 15.0), name='TimedOncomingCar'):
         super().__init__(actor, plan, speed, lights, name=name)
         self._ego = ego
         self._target_dist = target_dist
@@ -528,7 +528,9 @@ class GlarePedestrianPopOut(_GlareScenario):
         hold           seconds a walker stands in the ego's lane before walking on (3)
         second_gap     a second lit car this far behind the first at the start, m (0 = none)
         second_dist    its distance to the ego when the adversary steps out, m ('auto':
-                       where its inner lamp lines up with the adversary halfway across)
+                       where its inner lamp lines up with the adversary at line_up)
+        line_up        how far across the adversary is when the second car's inner lamp
+                       lines up with them, 0-1 (0.25; lower brings the car closer behind them)
         street_lights  'on' (Bench2Drive's) or 'off' along the stretch (on)
         beams          the car's 'low' or 'high' beams (low)
     """
@@ -546,6 +548,7 @@ class GlarePedestrianPopOut(_GlareScenario):
         self._hold = get_value_parameter(config, 'hold', float, 3.0)
         self._second_gap = get_value_parameter(config, 'second_gap', float, 0.0)
         self._second_dist = get_value_parameter(config, 'second_dist', str, 'auto')
+        self._line_up = min(max(get_value_parameter(config, 'line_up', float, 0.25), 0.0), 0.9)
         if self._kind not in ('walker', 'bicycle'):
             raise ValueError("'adversary' must be 'walker' or 'bicycle', not %r" % self._kind)
         super().__init__('GlarePedestrianPopOut', world, ego_vehicles, config, debug_mode,
@@ -603,18 +606,26 @@ class GlarePedestrianPopOut(_GlareScenario):
         """How far from the ego the second car should be as the adversary steps out.
 
         With 'auto': far enough that, seen from the ego, its inner headlamp lines
-        up with the adversary halfway across. The adversary then steps out
-        about (crossing time + arrive_before) x ego speed ahead of the ego,
-        which is why the mark moves with the ego's speed.
+        up with the adversary when they are line_up of the way across. The
+        adversary steps out about (crossing time + arrive_before) x ego speed
+        ahead of the ego, which is why the mark moves with the ego's speed.
+        Lining up early (0.25) keeps the car a few metres behind them; at 0 it
+        would reach them as they set off.
         """
         if self._second_dist != 'auto':
             return float(self._second_dist)
-        ego = self.ego_vehicles[0]
-        crossing_s = self._lateral() / self._speed + self._arrive_before
-        depth = CarlaDataProvider.get_velocity(ego) * crossing_s + ego.bounding_box.extent.x
+        ego_speed = CarlaDataProvider.get_velocity(self.ego_vehicles[0])
+        walk_s = self._lateral() / self._speed
+        depth = ego_speed * (walk_s + self._arrive_before) + self.ego_vehicles[0].bounding_box.extent.x
         lamp = (self._meet_wp.lane_width / 2.0 + self._oncoming_wp.lane_width / 2.0
                 - 0.6)                                    # inner lamp, ~0.6 m in from the car's centre line
-        return min(max(lamp * depth / (self._lateral() / 2.0), 15.0), 45.0)
+        # Line up line_up x walk_s after the step-out, then add how far both close in meanwhile.
+        f = self._line_up
+        closing = (ego_speed + CarlaDataProvider.get_velocity(self._second)) * f * walk_s
+        mark = lamp * (depth - ego_speed * f * walk_s) / (self._lateral() * (1.0 - f)) + closing
+        # Never closer than 4 m behind the adversary as they set off.
+        behind = depth + self._second.bounding_box.extent.x + 4.0
+        return min(max(mark, behind), 45.0)
 
     def _state(self):
         ego = CarlaDataProvider.get_location(self.ego_vehicles[0])
