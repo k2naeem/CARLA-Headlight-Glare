@@ -37,9 +37,19 @@ within half a second: the car's approach sweeps its lamps outward while the
 pedestrian walks inward. By the time they step out, 8–14 m ahead of the ego,
 the car is beside the ego and its lamps are at the image edge. So the glare
 hides them appearing, and darkness (`PedestrianDark`) hides them stepping
-out. Glare over the step-out itself needs a second car (#9 below). Every
-frame is labelled (below), so the dataset records exactly which frames hide
-them.
+out. Every frame is labelled (below), so the dataset records exactly which
+frames hide them.
+
+**Two cars (`PedestrianTwoCarsDark`).** A second lit car starts 30 m behind
+the first. Once the pedestrian is in place, its speed is set every tick so
+that, as they step out, it is where its inner headlamp lines up with them
+halfway across: about 35 m from an ego at 8 m/s, 20 m at 4 m/s. Its glare
+then covers the step-out itself. In the offline sim, at `--glare-size 2`, the
+pedestrian is inside that glare for 0.4–0.6 s of their 1.1 s crossing, at
+ego speeds of 4–10 m/s, and still stops 0.4 s before impact. For about 0.2 s
+mid-crossing they stand in front of that inner lamp. The injector then skips
+that lamp's glare (a covered lamp does not glare), and the outer lamp still
+glares.
 
 **Bigger glare.** `python run.py run ... --glare-size 2` makes every part of
 the glare twice as large: the zone where a pedestrian keeps under half their
@@ -64,6 +74,7 @@ Variants are route-file parameters, no code changes needed:
 | `behind`, `ped_offset` | pedestrian | 0.5 m, `auto` (0.15 m clear of the car's side) | where they appear |
 | `speed`, `arrive_before` | pedestrian | 2.5 m/s, 0.5 s | how fast they cross; how long before impact they stop in the ego's lane |
 | `hold`, `car_speed` | pedestrian | 3 s, 9 m/s | |
+| `second_gap`, `second_dist` | pedestrian | 0 (none), `auto` | a second lit car this far behind the first; its distance to the ego at the step-out |
 | `street_lights` | both | `on` | `off`: no street lights along the stretch, lit only by headlights |
 | `lead_speed`, `pass_speed` | overtake | 5, 15 m/s | |
 | `swing_dist`, `pull_out_gap`, `catch_gap`, `return_gap` | overtake | 75, 5, 25, 3 m | |
@@ -88,6 +99,7 @@ Each spot gets three routes:
 | 91001+ | `PedestrianDark` | the pedestrian with street lights off, lit only by headlights (the hard case) |
 | 92001+ | `Overtake` | the oncoming overtake |
 | 93001+ | `PedestrianLit` | the pedestrian under Bench2Drive's street lights (the easier case) |
+| 94001+ | `PedestrianTwoCarsDark` | street lights off, plus a second lit car whose glare covers the step-out |
 
 Then, from `../bench2drive_scenarios`:
 
@@ -106,7 +118,7 @@ other: `python run.py run 91001`.
 
 Each run folder is laid out like a Bench2Drive run, plus two label files:
 - `scenario_events.jsonl`: one line per moment (`street_lights_off`,
-  `popout_start`, `popout_walk`, `popout_in_lane`, `popout_clear`, `overtake_swing`,
+  `popout_start`, `second_car_at_mark`, `popout_walk`, `popout_in_lane`, `popout_clear`, `overtake_swing`,
   `overtake_return`) with its CARLA frame, which matches the `frame` in
   `meta/<step>.json`. That is where the hazard is in the video.
 - `road_user_glare.jsonl`: for every step with a pedestrian or cyclist in
@@ -148,6 +160,5 @@ Then add the class and its default parameters to `SCENARIOS` in
 | # | Scenario | Why Bench2Drive can't | What to build | Start from |
 | --- | --- | --- | --- | --- |
 | 7 | Sudden high beams on a bend | Traffic Manager picks the beams, usually low; a scenario cannot request high beams | A route where one car appears around a bend at 30–50 m with `beams=high` | Town07 rural bends (`spawn_points.py` to pick them), rural Town12 |
-| 8 | Dark-road versions | Bench2Drive turns street lights on within 100 m of the ego at night | A street-light switch, applied to the Bench2Drive families and these | The pole-disabling code in `carla_script_closed_loop.py` |
-| 9 | Pedestrian between two oncoming cars | One car's glare cannot cover the step-out: by then the car is beside the ego | A second lit car 15–25 m behind the first. The pedestrian steps out behind car 1 and walks into car 2's glare: in the offline sim they stay within 40 px of car 2's lamp for 0.6–0.8 s at size 1, while already stepping into the ego's lane. Check that the pedestrian doesn't block car 2's lamp, since the injector drops glare for a covered lamp | `GlarePedestrianPopOut` plus a second `OncomingCar`; the oncoming batches in `carla_script_closed_loop.py` |
+| 8 | Dark-road Bench2Drive routes | Bench2Drive turns street lights on near the ego at night | Our scenarios have the switch (`street_lights="off"`); the Bench2Drive families still need it, e.g. from the agent | `StreetLightsOff` in `glare_popout.py` |
 | 10 | Sun glare at dawn or dusk | The glare code only uses headlights as light sources | A sun light source in the glare code, from the weather's sun angles; future work | — |
