@@ -360,6 +360,15 @@ def summarize_run(run_dir, root):
         row[cam] = sum(1 for e in log if e['camera'] == cam and e['glaring_headlights'] > 0)
     row['missing'] = sum(1 for e in log if e.get('aux_missing'))
 
+    # Steps with a pedestrian or cyclist in CAM_FRONT, and those the glare hides.
+    row['road_user_steps'] = row['road_user_hidden'] = 0
+    users = os.path.join(run_dir, 'road_user_glare.jsonl')
+    if os.path.exists(users):
+        with open(users, encoding='utf-8') as fh:
+            labels = [json.loads(line) for line in fh if line.strip()]
+        row['road_user_steps'] = len(labels)
+        row['road_user_hidden'] = sum(1 for e in labels if e['hidden'])
+
     # A front frame with glaring headlights must differ from the clean copy;
     # one without must be byte-identical.
     front = {e['frame']: e['glaring_headlights'] for e in log if e['camera'] == 'CAM_FRONT'}
@@ -387,17 +396,20 @@ def summarize(root):
         return 1
     rows = [summarize_run(d, root) for d in runs]
     width = max(len(r['run']) for r in rows)
-    print('%-*s %6s %6s %6s %6s %5s  %s' % (width, 'run', 'steps', 'front', 'left', 'right', 'miss', 'checks'))
+    print('%-*s %6s %6s %6s %6s %5s %7s  %s' % (width, 'run', 'steps', 'front', 'left', 'right', 'miss',
+                                              'hidden', 'checks'))
     for r in rows:
         notes = []
         if r['CAM_FRONT'] + r['CAM_FRONT_LEFT'] + r['CAM_FRONT_RIGHT'] == 0:
             notes.append('no glare')
         if r['exit_status']:
             notes.append('exit %s, see run.log' % r['exit_status'])
-        print('%-*s %6d %6d %6d %6d %5d  %s%s' % (
+        hidden = '%d/%d' % (r['road_user_hidden'], r['road_user_steps']) if r['road_user_steps'] else '-'
+        print('%-*s %6d %6d %6d %6d %5d %7s  %s%s' % (
             width, r['run'], r['steps'], r['CAM_FRONT'], r['CAM_FRONT_LEFT'], r['CAM_FRONT_RIGHT'],
-            r['missing'], 'PASS' if r['pass'] else 'FAIL', ('  (%s)' % ', '.join(notes)) if notes else ''))
-    print('front/left/right = steps with glaring headlights on that camera')
+            r['missing'], hidden, 'PASS' if r['pass'] else 'FAIL', ('  (%s)' % ', '.join(notes)) if notes else ''))
+    print('front/left/right = steps with glaring headlights on that camera; '
+          'hidden = steps a pedestrian or cyclist is mostly washed out / steps one is in view')
     with open(os.path.join(root, 'summary.csv'), 'w', newline='', encoding='utf-8') as fh:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
         writer.writeheader()

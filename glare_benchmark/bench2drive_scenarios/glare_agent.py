@@ -30,6 +30,8 @@ Writes to $GLARE_OUTPUT (run.py sets one folder per route):
     clean/CAM_FRONT/<step>.jpg    the same front frame without glare
     meta/<step>.json              the 10 image slots, CARLA frame, speed
     glare_log.jsonl               every glare decision, per camera and frame
+    road_user_glare.jsonl         per step: how much of the pedestrians and cyclists
+                                  in CAM_FRONT the glare washes out (see _label_road_users)
 """
 import copy
 import json
@@ -54,6 +56,10 @@ DEBUG_EVERY = int(os.environ.get('GLARE_DEBUG_EVERY', '10'))
 # car is already lit when it comes into range.
 HEADLIGHT_RADIUS_M = 90.0
 DRIVING_SPEED_MS = 1.0             # above this once = driving, not parked
+
+# CARLA 0.9.15 semantic classes of the road users glare can hide.
+ROAD_USER_LABELS = (12, 13, 19)    # pedestrian, rider, bicycle
+WASHED_COVER = 0.5                 # a pixel pushed at least half way to white is washed out
 HEADLIGHTS = {
     'low': carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam,
     'high': (carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam
@@ -159,6 +165,43 @@ class GlareAgent(NpcAgent):
         with open(os.path.join(self.save_dir, 'glare_debug.jsonl'), 'a', encoding='utf-8') as fh:
             fh.write(json.dumps(entry) + '\n')
 
+    def _label_road_users(self, frame):
+        """Record how much of the pedestrians and cyclists in CAM_FRONT the glare washes out.
+
+        The seg camera marks which pixels are a pedestrian, rider or bicycle.
+        For each one, cover = how far the glare pushed it from its clean
+        brightness toward white (0 = untouched, 1 = white), measured on the two
+        saved JPEGs, as DeepSight reads them. One line per step with any such
+        pixels goes to road_user_glare.jsonl: the pixel count, the mean cover,
+        the share of pixels with cover >= WASHED_COVER, and hidden = at least
+        half of them washed out. Pixels hidden behind something else are not
+        counted: the seg camera does not see them either. Needs glare on (the
+        seg camera only runs then).
+        """
+        injector = self.inputs._glare
+        cam = injector.cameras.get('CAM_FRONT') if injector is not None else None
+        seg = cam.seg.get(frame) if cam is not None else None
+        if seg is None:
+            return
+        mask = np.isin(seg, ROAD_USER_LABELS)
+        pixels = int(mask.sum())
+        if not pixels:
+            return
+        step = self.inputs.step
+        clean = cv2.imread(os.path.join(self.clean_dir, '%05d.jpg' % step), cv2.IMREAD_GRAYSCALE)
+        glared = cv2.imread(os.path.join(self.save_dir, 'camera', 'CAM_FRONT', '%05d.jpg' % step),
+                            cv2.IMREAD_GRAYSCALE)
+        if clean is None or glared is None or clean.shape != mask.shape or glared.shape != mask.shape:
+            return
+        c = clean[mask].astype(np.float32)
+        g = glared[mask].astype(np.float32)
+        cover = np.clip((g - c) / np.maximum(255.0 - c, 1.0), 0.0, 1.0)
+        washed = float(np.mean(cover >= WASHED_COVER))
+        with open(os.path.join(self.save_dir, 'road_user_glare.jsonl'), 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps({'step': step, 'frame': frame, 'pixels': pixels,
+                                 'mean_cover': round(float(cover.mean()), 3),
+                                 'washed': round(washed, 3), 'hidden': washed >= 0.5}) + '\n')
+
     def sensors(self):
         return copy.deepcopy(DEEPSIGHT_CAMERA_SPECS) + [
             {'type': 'sensor.speedometer', 'reading_frequency': 20, 'id': 'SPEED'},
@@ -210,6 +253,7 @@ class GlareAgent(NpcAgent):
         cv2.imwrite(os.path.join(self.clean_dir, '%05d.jpg' % self.inputs.step),
                     input_data['CAM_FRONT'][1][:, :, :3], [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         self._debug_front(input_data)
+        self._label_road_users(input_data['CAM_FRONT'][0])
         return super().run_step(input_data, timestamp)
 
     def destroy(self):
