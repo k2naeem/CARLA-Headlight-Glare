@@ -22,19 +22,31 @@ the same every run, whatever speed the ego drives.
 car, inside its glare. Nobody stands in the road beforehand: the pedestrian
 stays hidden until the lit oncoming car is 30 m from the ego. Then they appear
 just behind its rear bumper, right beside its flank (between the car and the
-centre line), and walk into the ego's lane at 1.8 m/s. They stand there 3 s
-and walk off the road. Because the release follows the car, it lines up the
-same way at any ego speed. The clean frame shows the pedestrian throughout;
-only the glare hides them.
+centre line), inside its glare. They wait in the dark, then hurry into the
+ego's lane at 2.5 m/s, timed from the ego's speed so they stop right in front
+of it 0.5 s before it reaches them: too late to stop for a driver who only
+sees them then. They stand there 3 s and walk off the road. Because the
+release follows the car, and the step-out follows the ego, it plays out the
+same way at any ego speed. The clean frame shows the pedestrian throughout.
 
 How long the glare hides them is limited by the glare itself. Measured with
 `glare()`, a pedestrian loses most of their contrast only within about 40 px
 of a headlamp, and is nearly back to normal by 80 px. With one car, the
 pedestrian starts at the edge of that zone (about 44 px) and is out of it
 within half a second: the car's approach sweeps its lamps outward while the
-pedestrian walks inward. Every frame is labelled (below), so the dataset
-records exactly which frames hide them. Longer hiding needs a second car (#9
-below).
+pedestrian walks inward. By the time they step out, 8–14 m ahead of the ego,
+the car is beside the ego and its lamps are at the image edge. So the glare
+hides them appearing, and darkness (`PedestrianDark`) hides them stepping
+out. Glare over the step-out itself needs a second car (#9 below). Every
+frame is labelled (below), so the dataset records exactly which frames hide
+them.
+
+**Bigger glare.** `python run.py run ... --glare-size 2` makes every part of
+the glare twice as large: the zone where a pedestrian keeps under half their
+contrast grows from about 37 px to 80 px at 25 m, and from 50 to 108 px at
+15 m. At 3 the glare starts dimming the ego's lane centre itself. Runs are
+named `..._glare1x2_...`. It applies to any run, Bench2Drive's too; the
+default is 1.
 
 **`GlareOncomingOvertake`** — an oncoming car pulls out of another car's glare,
 into the ego's lane. A slow lit car (5 m/s) comes toward the ego, with a
@@ -50,7 +62,8 @@ Variants are route-file parameters, no code changes needed:
 | `adversary` | pedestrian | `walker` | `bicycle` (rides straight across) |
 | `release_dist` | pedestrian | 30 m | the car's distance to the ego when the pedestrian appears |
 | `behind`, `ped_offset` | pedestrian | 0.5 m, `auto` (0.15 m clear of the car's side) | where they appear |
-| `speed`, `hold`, `car_speed` | pedestrian | 1.8 m/s, 3 s, 9 m/s | |
+| `speed`, `arrive_before` | pedestrian | 2.5 m/s, 0.5 s | how fast they cross; how long before impact they stop in the ego's lane |
+| `hold`, `car_speed` | pedestrian | 3 s, 9 m/s | |
 | `street_lights` | both | `on` | `off`: no street lights along the stretch, lit only by headlights |
 | `lead_speed`, `pass_speed` | overtake | 5, 15 m/s | |
 | `swing_dist`, `pull_out_gap`, `catch_gap`, `return_gap` | overtake | 75, 5, 25, 3 m | |
@@ -79,7 +92,7 @@ Each spot gets three routes:
 Then, from `../bench2drive_scenarios`:
 
 ```bash
-python run.py run glare_popout --glare 1.0 --headlights scene
+python run.py run glare_popout --glare 1.0 --glare-size 2 --headlights scene
 ```
 
 ```bash
@@ -93,7 +106,7 @@ other: `python run.py run 91001`.
 
 Each run folder is laid out like a Bench2Drive run, plus two label files:
 - `scenario_events.jsonl`: one line per moment (`street_lights_off`,
-  `popout_start`, `popout_in_lane`, `popout_clear`, `overtake_swing`,
+  `popout_start`, `popout_walk`, `popout_in_lane`, `popout_clear`, `overtake_swing`,
   `overtake_return`) with its CARLA frame, which matches the `frame` in
   `meta/<step>.json`. That is where the hazard is in the video.
 - `road_user_glare.jsonl`: for every step with a pedestrian or cyclist in
@@ -136,5 +149,5 @@ Then add the class and its default parameters to `SCENARIOS` in
 | --- | --- | --- | --- | --- |
 | 7 | Sudden high beams on a bend | Traffic Manager picks the beams, usually low; a scenario cannot request high beams | A route where one car appears around a bend at 30–50 m with `beams=high` | Town07 rural bends (`spawn_points.py` to pick them), rural Town12 |
 | 8 | Dark-road versions | Bench2Drive turns street lights on within 100 m of the ego at night | A street-light switch, applied to the Bench2Drive families and these | The pole-disabling code in `carla_script_closed_loop.py` |
-| 9 | Pedestrian between two oncoming cars | One car hides a walking pedestrian for under half a second | A second lit car 15–25 m behind the first. The pedestrian steps out behind car 1 and walks into car 2's glare: in the offline sim they stay within 40 px of car 2's lamp for 0.6–0.8 s, while already stepping into the ego's lane. Check that the pedestrian doesn't block car 2's lamp, since the injector drops glare for a covered lamp | `GlarePedestrianPopOut` plus a second `OncomingCar`; the oncoming batches in `carla_script_closed_loop.py` |
+| 9 | Pedestrian between two oncoming cars | One car's glare cannot cover the step-out: by then the car is beside the ego | A second lit car 15–25 m behind the first. The pedestrian steps out behind car 1 and walks into car 2's glare: in the offline sim they stay within 40 px of car 2's lamp for 0.6–0.8 s at size 1, while already stepping into the ego's lane. Check that the pedestrian doesn't block car 2's lamp, since the injector drops glare for a covered lamp | `GlarePedestrianPopOut` plus a second `OncomingCar`; the oncoming batches in `carla_script_closed_loop.py` |
 | 10 | Sun glare at dawn or dusk | The glare code only uses headlights as light sources | A sun light source in the glare code, from the weather's sun angles; future work | — |

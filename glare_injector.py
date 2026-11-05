@@ -117,6 +117,8 @@ class GlareInjector:
     world, hero     the CARLA world and the ego vehicle the cameras ride on
     sensor_specs    the agent's sensors() list (camera id, pose, size, FOV)
     severity        glare level; 0 = off, 1 = the tuned look
+    size            glare size; 2 = every part of the glare (core, bloom,
+                    halo, starburst, veil) twice as large, 1 = the tuned look
     strict          if a frame's seg/depth never arrives, raise instead of
                     passing the frame through without glare
 
@@ -126,12 +128,13 @@ class GlareInjector:
     """
 
     def __init__(self, world, hero, sensor_specs, cameras=GLARE_CAMERAS,
-                 severity=1.0, depth_downscale=4, max_distance=70.0,
+                 severity=1.0, size=1.0, depth_downscale=4, max_distance=70.0,
                  min_detected_px=150, intensity=3.5, veil_strength=0.22,
                  frame_timeout_s=2.0, strict=False):
         self.world = world
         self.hero = hero
         self.severity = float(severity)
+        self.size = float(size)
         self.depth_downscale = depth_downscale
         self.max_distance = max_distance
         self.min_detected_px = min_detected_px
@@ -327,7 +330,7 @@ class GlareInjector:
         if cam is None or self.severity <= 0.0:
             return bgr
 
-        entry = {'frame': int(frame), 'camera': cam_id, 'severity': self.severity,
+        entry = {'frame': int(frame), 'camera': cam_id, 'severity': self.severity, 'size': self.size,
                  'glaring_headlights': 0, 'verdicts': {}, 'aux_missing': False,
                  'warmup': False}
 
@@ -373,11 +376,14 @@ class GlareInjector:
         entry['glaring_headlights'] = len(headlights)
 
         if headlights:
+            # The glare code sizes everything in proportion to the focal length
+            # it is given, so scaling it scales the whole glare.
+            size_px = cam.focal_px * self.size
             mask, rgb = geometry_glare_mask(rgb, seg, headlights, require_bright=False,
-                                            require_vehicle=True, focal_px=cam.focal_px)
+                                            require_vehicle=True, focal_px=size_px)
             out = glare(mask, rgb, intensity=self.intensity, headlight_pixels=headlights,
                         veil_strength=self.veil_strength, severity=self.severity,
-                        focal_px=cam.focal_px)
+                        focal_px=size_px)
         else:
             out = bgr
 
@@ -465,10 +471,11 @@ class GlareMixin:
             if hero is None:
                 return None
             severity = float(os.environ.get('GLARE_SEVERITY', '1.0'))
+            size = float(os.environ.get('GLARE_SIZE', '1.0'))
             strict = os.environ.get('GLARE_STRICT', '0').lower() in ('1', 'true', 'yes')
             injector = GlareInjector(CarlaDataProvider.get_world(), hero, self.sensors(),
                                      cameras=self.glare_cameras, severity=severity,
-                                     strict=strict)
+                                     size=size, strict=strict)
             self._glare = injector
         return injector
 

@@ -269,6 +269,7 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file, scenario_root):
         'SAVE_PATH': run_dir,
         'GLARE_OUTPUT': run_dir,
         'GLARE_SEVERITY': str(args.glare),
+        'GLARE_SIZE': str(args.glare_size),
         'GLARE_HEADLIGHTS': args.headlights,
         'GLARE_DEBUG_EVERY': str(args.debug_every),
         'GLARE_STRICT': '0' if args.no_strict else '1',
@@ -279,8 +280,9 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file, scenario_root):
 
 def run_one(args, b2d, carla, scenario, out_root):
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-    run_dir = os.path.join(out_root, '%s_glare%g_%s_%s' % (scenario['name'], args.glare,
-                                                           args.headlights, stamp))
+    size = '' if args.glare_size == 1.0 else 'x%g' % args.glare_size     # glare1x2 = level 1, twice the size
+    run_dir = os.path.join(out_root, '%s_glare%g%s_%s_%s' % (scenario['name'], args.glare, size,
+                                                             args.headlights, stamp))
     os.makedirs(run_dir)
     route_file = scenario['file']
     overlay = scenario_overlay(b2d) if scenario.get('custom') else None
@@ -307,7 +309,7 @@ def run_one(args, b2d, carla, scenario, out_root):
             if overlay:
                 shutil.rmtree(overlay, ignore_errors=True)
     with open(os.path.join(run_dir, 'run_info.json'), 'w', encoding='utf-8') as fh:
-        json.dump(dict(scenario, glare_level=args.glare, headlights=args.headlights,
+        json.dump(dict(scenario, glare_level=args.glare, glare_size=args.glare_size, headlights=args.headlights,
                        driver=args.driver, started=started,
                        finished=datetime.datetime.now().isoformat(timespec='seconds'),
                        exit_status=status), fh, indent=1)
@@ -325,8 +327,8 @@ def cmd_run(args):
         sys.exit('No Bench2Drive leaderboard in %s (python run.py check)' % b2d)
     scenarios = select(args.target, load_index())
     os.makedirs(out_root, exist_ok=True)
-    print('%d scenario(s), glare %g, headlights %s, driver %s -> %s'
-          % (len(scenarios), args.glare, args.headlights, args.driver, out_root))
+    print('%d scenario(s), glare %g (size %g), headlights %s, driver %s -> %s'
+          % (len(scenarios), args.glare, args.glare_size, args.headlights, args.driver, out_root))
 
     failed = [s['name'] for s in scenarios if run_one(args, b2d, carla, s, out_root) != 0]
     print()
@@ -436,6 +438,8 @@ def main():
     r = sub.add_parser('run', parents=[paths], help='run scenarios, one leaderboard call each')
     r.add_argument('target', help='all, a family (glare_popout for ours), or route ids like 3410,3436')
     r.add_argument('--glare', type=float, default=1.0, help='glare level, 0 to 2 (default 1.0)')
+    r.add_argument('--glare-size', type=float, default=1.0,
+                   help='glare size: 2 makes every part of the glare twice as large (default 1)')
     r.add_argument('--out', help='output folder (default $GLARE_OUT or ~/glare_runs)')
     r.add_argument('--headlights', choices=['low', 'high', 'scene'], default='low',
                    help="force low or high beams on nearby traffic (default low); "

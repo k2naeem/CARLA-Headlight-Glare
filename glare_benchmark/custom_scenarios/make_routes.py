@@ -31,7 +31,8 @@ ROUTES = os.path.join(HERE, 'routes')
 FAMILY = 'glare_popout'
 
 PEDESTRIAN = {'distance': 90, 'car_ahead': 35, 'car_speed': 9, 'release_dist': 30, 'behind': 0.5,
-              'ped_offset': 'auto', 'adversary': 'walker', 'speed': 1.8, 'hold': 3, 'beams': 'low'}
+              'ped_offset': 'auto', 'adversary': 'walker', 'speed': 2.5, 'arrive_before': 0.5, 'hold': 3,
+              'beams': 'low'}
 
 # Variant name: (scenario type, first route id, parameters written into its route files).
 # Ids start at 91000 so they never clash with Bench2Drive's.

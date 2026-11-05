@@ -6,8 +6,9 @@ evaluation script with
 
     TEAM_AGENT=team_code/glare_qwen_agent.py
 
-GLARE_SEVERITY (default 1.0) and GLARE_STRICT (default 0) set the glare; see
-glare_injector.py. Severity 0 runs DeepSight unchanged.
+GLARE_SEVERITY (default 1.0), GLARE_SIZE (default 1.0) and GLARE_STRICT
+(default 0) set the glare; see glare_injector.py. Severity 0 runs DeepSight
+unchanged.
 
 Besides adding glare, this agent fixes two things that stop DeepSight's own
 agent from running outside its authors' machines:
