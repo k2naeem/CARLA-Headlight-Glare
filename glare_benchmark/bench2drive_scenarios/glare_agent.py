@@ -18,10 +18,13 @@ glaring when it moves, and a parked car never glares, whatever its lights show.
 Headlights ($GLARE_HEADLIGHTS). Bench2Drive's night traffic mostly drives
 with its headlights off, so there is nothing to glare. With "low" (default) or
 "high", every step this agent switches on the headlights of each driving
-4-wheeled vehicle within HEADLIGHT_RADIUS_M of the ego and takes its lights
+car or motorcycle within HEADLIGHT_RADIUS_M of the ego and takes its lights
 away from the Traffic Manager, which would otherwise switch them back off.
 "scene" leaves Bench2Drive's lighting as it is. Lights set during a step show
-from the next frame on.
+from the next frame on. Scenario vehicles with the role 'scenario no
+lights...' are never switched on: their scenario sets their lights, so a car
+it drives dark stays dark. In every mode a vehicle glares only while its
+headlights are on.
 
 Writes to $GLARE_OUTPUT (run.py sets one folder per route):
     compare_CAM_FRONT.mp4         clean | glared front camera, the whole route
@@ -32,6 +35,8 @@ Writes to $GLARE_OUTPUT (run.py sets one folder per route):
     glare_log.jsonl               every glare decision, per camera and frame
     road_user_glare.jsonl         per step: how much of the pedestrians and cyclists
                                   in CAM_FRONT the glare washes out (see _label_road_users)
+    hazard_glare.jsonl            per step: the same for a scenario's hazard vehicle
+                                  (see _label_hazards)
 """
 import copy
 import json
@@ -46,7 +51,10 @@ from leaderboard.autoagents.npc_agent import NpcAgent
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
 from deepsight_input_agent import DEEPSIGHT_CAMERA_SPECS, JPEG_QUALITY, make_glare_agent_class
-from glare_mask_closed_loop import camera_detected_headlights, project_points_to_image
+from glare_injector import headlamp_count
+from glare_mask_closed_loop import (TWO_WHEELER_TAGS, VEHICLE_TAGS, camera_detected_headlights,
+                                    detected_vehicle_mask, project_points_to_image,
+                                    project_vehicle_footprint)
 
 # Every N steps, save the front frame with each lit car's predicted position
 # and glare verdict drawn on, plus the numbers ($GLARE_DEBUG_EVERY, 0 = off).
@@ -60,6 +68,10 @@ DRIVING_SPEED_MS = 1.0             # above this once = driving, not parked
 # CARLA 0.9.15 semantic classes of the road users glare can hide.
 ROAD_USER_LABELS = (12, 13, 19)    # pedestrian, rider, bicycle
 WASHED_COVER = 0.5                 # a pixel pushed at least half way to white is washed out
+# Scenario vehicles whose lights their scenario sets (Bench2Drive's convention),
+# and among them the hazard a scenario wants labelled (custom_scenarios/glare_popout.py).
+OWN_LIGHTS_ROLE = 'scenario no lights'
+HAZARD_ROLE = 'scenario no lights hazard'
 HEADLIGHTS = {
     'low': carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam,
     'high': (carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam
@@ -178,29 +190,86 @@ class GlareAgent(NpcAgent):
         counted: the seg camera does not see them either. Needs glare on (the
         seg camera only runs then).
         """
-        injector = self.inputs._glare
-        cam = injector.cameras.get('CAM_FRONT') if injector is not None else None
+        cam = self._front_cam()
         seg = cam.seg.get(frame) if cam is not None else None
         if seg is None:
             return
         mask = np.isin(seg, ROAD_USER_LABELS)
-        pixels = int(mask.sum())
-        if not pixels:
+        if not mask.any():
             return
+        cover = self._cover(mask)
+        if cover is not None:
+            self._append('road_user_glare.jsonl', dict({'step': self.inputs.step, 'frame': frame}, **cover))
+
+    def _label_hazards(self, frame):
+        """Record how much of each hazard vehicle in CAM_FRONT is hidden, and by what.
+
+        A hazard is a vehicle its scenario spawned with HAZARD_ROLE, such as the
+        overtaker in GlareOncomingOvertake. One line per step it is in front of
+        the camera within 70 m goes to hazard_glare.jsonl: footprint_px is the
+        area of its projected box, pixels how many of those the camera sees of
+        it (seg + matching depth, so the lead car in front of it does not
+        count), then the same cover numbers as _label_road_users over those
+        pixels. Few pixels = hidden by the car in front; hidden = what the
+        camera does see is mostly washed out by glare. Lights on or off, it is
+        labelled. Needs glare on (the seg camera only runs then).
+        """
+        cam = self._front_cam()
+        if cam is None or frame not in cam.pose or cam.seg.get(frame) is None:
+            return
+        seg, depth = cam.seg[frame], cam.depth.get(frame)
+        cam_matrix, cam_loc = self.inputs._glare.camera_pose(cam, cam.pose[frame])
+        for actor in CarlaDataProvider.get_world().get_actors().filter('vehicle.*'):
+            try:
+                if actor.attributes.get('role_name') != HAZARD_ROLE:
+                    continue
+                bb, tf = actor.bounding_box, actor.get_transform()
+                rec = {'matrix': tf.get_matrix(), 'extent': (bb.extent.x, bb.extent.y, bb.extent.z),
+                       'bb_center': (bb.location.x, bb.location.y, bb.location.z)}
+                lamps = headlamp_count(actor)
+                lit = bool(int(actor.get_light_state()) & int(carla.VehicleLightState.LowBeam
+                                                              | carla.VehicleLightState.HighBeam))
+            except RuntimeError:
+                continue                   # destroyed mid-step
+            footprint = project_vehicle_footprint(rec, cam_matrix, cam.K, (cam.width, cam.height))
+            if footprint is None or footprint[4] > 70.0:
+                continue
+            x0, y0, x1, y1 = footprint[:4]
+            # A tight depth match, so the lead car a few metres in front is not counted.
+            own = detected_vehicle_mask(footprint, depth, seg, (cam.width, cam.height), depth_tol_m=1.5,
+                                        depth_tol_frac=0.04,
+                                        tags=TWO_WHEELER_TAGS if lamps == 1 else VEHICLE_TAGS)
+            mask = np.zeros(seg.shape, dtype=bool)
+            mask[y0:y1, x0:x1] = own
+            entry = {'step': self.inputs.step, 'frame': frame, 'actor': actor.id,
+                     'type': actor.type_id, 'lights_on': lit,
+                     'distance_m': round(float(footprint[4]), 1), 'footprint_px': (x1 - x0) * (y1 - y0)}
+            cover = self._cover(mask) if mask.any() else None
+            entry.update(cover or {'pixels': 0, 'mean_cover': 0.0, 'washed': 0.0, 'hidden': False})
+            self._append('hazard_glare.jsonl', entry)
+
+    def _front_cam(self):
+        injector = self.inputs._glare
+        return injector.cameras.get('CAM_FRONT') if injector is not None else None
+
+    def _cover(self, mask):
+        """Pixel count and how far the glare pushed `mask`'s pixels toward white, on this step's JPEGs."""
         step = self.inputs.step
         clean = cv2.imread(os.path.join(self.clean_dir, '%05d.jpg' % step), cv2.IMREAD_GRAYSCALE)
         glared = cv2.imread(os.path.join(self.save_dir, 'camera', 'CAM_FRONT', '%05d.jpg' % step),
                             cv2.IMREAD_GRAYSCALE)
         if clean is None or glared is None or clean.shape != mask.shape or glared.shape != mask.shape:
-            return
+            return None
         c = clean[mask].astype(np.float32)
         g = glared[mask].astype(np.float32)
         cover = np.clip((g - c) / np.maximum(255.0 - c, 1.0), 0.0, 1.0)
         washed = float(np.mean(cover >= WASHED_COVER))
-        with open(os.path.join(self.save_dir, 'road_user_glare.jsonl'), 'a', encoding='utf-8') as fh:
-            fh.write(json.dumps({'step': step, 'frame': frame, 'pixels': pixels,
-                                 'mean_cover': round(float(cover.mean()), 3),
-                                 'washed': round(washed, 3), 'hidden': washed >= 0.5}) + '\n')
+        return {'pixels': int(mask.sum()), 'mean_cover': round(float(cover.mean()), 3),
+                'washed': round(washed, 3), 'hidden': washed >= 0.5}
+
+    def _append(self, name, entry):
+        with open(os.path.join(self.save_dir, name), 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps(entry) + '\n')
 
     def sensors(self):
         return copy.deepcopy(DEEPSIGHT_CAMERA_SPECS) + [
@@ -220,7 +289,7 @@ class GlareAgent(NpcAgent):
         in_range = 0
         for vehicle in CarlaDataProvider.get_world().get_actors().filter('vehicle.*'):
             try:
-                if vehicle.id == hero.id or int(vehicle.attributes.get('number_of_wheels', 4)) < 4:
+                if vehicle.id == hero.id or not headlamp_count(vehicle):
                     continue
                 if vehicle.get_location().distance(ego) > HEADLIGHT_RADIUS_M:
                     continue
@@ -233,7 +302,7 @@ class GlareAgent(NpcAgent):
                     else:
                         self._parked_ids.add(vehicle.id)
                         continue
-                if wanted is None:
+                if wanted is None or vehicle.attributes.get('role_name', '').startswith(OWN_LIGHTS_ROLE):
                     continue
                 if vehicle.id not in self._lit_ids:
                     self._tm.update_vehicle_lights(vehicle, False)
@@ -254,6 +323,7 @@ class GlareAgent(NpcAgent):
                     input_data['CAM_FRONT'][1][:, :, :3], [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         self._debug_front(input_data)
         self._label_road_users(input_data['CAM_FRONT'][0])
+        self._label_hazards(input_data['CAM_FRONT'][0])
         return super().run_step(input_data, timestamp)
 
     def destroy(self):

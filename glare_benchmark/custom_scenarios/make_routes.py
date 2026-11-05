@@ -33,15 +33,19 @@ FAMILY = 'glare_popout'
 PEDESTRIAN = {'distance': 90, 'car_ahead': 35, 'car_speed': 9, 'release_dist': 30, 'behind': 0.5,
               'ped_offset': 'auto', 'adversary': 'walker', 'speed': 2.5, 'arrive_before': 0.5, 'hold': 3,
               'beams': 'low'}
+OVERTAKE = {'distance': 60, 'lead_ahead': 50, 'lead_speed': 5, 'catch_gap': 25, 'pull_out_gap': 5,
+            'swing_dist': 75, 'pass_speed': 15, 'return_gap': 3, 'pull_back': 'lead', 'follower': 'car',
+            'follower_lights': 'on', 'street_lights': 'on', 'beams': 'low'}
+# Head-on: the overtaker stays in the ego's lane until past the ego, and swings out
+# at 55 m, when the lead is ~45 m away and its glare is large around the overtaker.
+HEAD_ON = dict(OVERTAKE, swing_dist=55, pull_back='ego')
 
 # Variant name: (scenario type, first route id, parameters written into its route files).
 # Ids start at 91000 so they never clash with Bench2Drive's.
 VARIANTS = {
     # Street lights off: lit only by headlights, the hard case.
     'PedestrianDark': ('GlarePedestrianPopOut', 91000, dict(PEDESTRIAN, street_lights='off')),
-    'Overtake': ('GlareOncomingOvertake', 92000, {
-        'distance': 60, 'lead_ahead': 50, 'lead_speed': 5, 'catch_gap': 25, 'pull_out_gap': 5,
-        'swing_dist': 75, 'pass_speed': 15, 'return_gap': 3, 'street_lights': 'on', 'beams': 'low'}),
+    'Overtake': ('GlareOncomingOvertake', 92000, OVERTAKE),
     # Bench2Drive's street lights: the pedestrian is lit from above, the easier case.
     'PedestrianLit': ('GlarePedestrianPopOut', 93000, dict(PEDESTRIAN, street_lights='on')),
     # A second lit car 24 m behind, timed to be a few metres behind the pedestrian as they step
@@ -49,6 +53,10 @@ VARIANTS = {
     'PedestrianTwoCarsDark': ('GlarePedestrianPopOut', 94000,
                               dict(PEDESTRIAN, second_gap=24, second_dist='auto', line_up=0.25,
                                    street_lights='off')),
+    # A car pulls out of the lead's glare onto a head-on course (follower_lights="off": a dark car).
+    'OvertakeHeadOn': ('GlareOncomingOvertake', 95000, HEAD_ON),
+    # The same with a motorcycle: one headlamp, hidden behind the lead until it pulls out.
+    'OvertakeHeadOnMoto': ('GlareOncomingOvertake', 96000, dict(HEAD_ON, follower='motorcycle')),
 }
 LEAD_IN_M = 30.0      # route before the trigger point, so the ego is up to speed
 BEFORE_M = LEAD_IN_M + max(p['distance'] for _, _, p in VARIANTS.values())   # route start to M

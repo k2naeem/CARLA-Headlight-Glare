@@ -29,9 +29,13 @@ GlarePedestrianPopOut
     step-out itself, which the first car, by then beside the ego, cannot.
 
 GlareOncomingOvertake
-    A slow lit oncoming car with a second car close behind it, hidden in its
-    glare. When the ego is within `swing_dist` of the second car, it pulls out
-    into the ego's lane to overtake, head-on, and pulls back in once past.
+    A slow lit oncoming car with a second vehicle close behind it, hidden in
+    its glare. When the ego is within `swing_dist` of the second one, it pulls
+    out into the ego's lane to overtake, head-on, and pulls back in once past
+    the lead, or (pull_back="ego") only once past the ego: a head-on course
+    the ego must avoid. The second vehicle is a car or a motorcycle (one
+    headlamp, narrow, easily lost beside the lead's lamps), with its lights on
+    or off.
 
 The oncoming cars drive a fixed plan with their own headlights on (low or
 high beams), so they glare under any --headlights mode, and the role name
@@ -81,6 +85,8 @@ BEAMS = {
 # Bench2Drive's RouteLightsBehavior switches the lights of 'scenario' cars on
 # and off by distance; it leaves this role alone, so the cars keep our lights.
 ROLE = 'scenario no lights'
+# The same, marking the vehicle the glare agent labels (hazard_glare.jsonl).
+HAZARD_ROLE = 'scenario no lights hazard'
 CAR_MODEL = 'vehicle.lincoln.mkz_2017'   # the oncoming model of carla_script_closed_loop.py
 BICYCLE_MODEL = 'vehicle.diamondback.century'
 # street_lights="off" darkens every street light this close to the meet point,
@@ -122,6 +128,17 @@ def oncoming_lane(wp):
         raise ValueError('no oncoming lane left of the ego lane at %s: these scenarios need a '
                          'two-way road (make_routes.py finds them)' % wp.transform.location)
     return left
+
+
+def motorcycle_model():
+    """A motorcycle blueprint, one with modelled lights if there is one (always the same pick)."""
+    bikes = sorted((bp for bp in CarlaDataProvider.get_world().get_blueprint_library().filter('vehicle.*')
+                    if bp.has_attribute('base_type') and bp.get_attribute('base_type').as_str() == 'motorcycle'),
+                   key=lambda bp: (not (bp.has_attribute('has_lights')
+                                        and bp.get_attribute('has_lights').as_bool()), bp.id))
+    if not bikes:
+        raise ValueError('no motorcycle blueprint in this CARLA build')
+    return bikes[0].id
 
 
 def planner(vehicle, max_throttle=0.75):
@@ -359,15 +376,16 @@ class OncomingOvertaker(AtomicBehavior):
     is `pull_out_gap` metres behind the lead (inside its glare, seen from the
     ego) when the ego is `swing_dist` away. Then it pulls out into the ego's
     lane at `pass_speed`, already moving faster than the lead, as a real
-    overtake does, and pulls back into its own lane `return_gap` metres ahead
-    of the lead, or at once if it is already past the ego. Never finishes on
-    its own.
+    overtake does. With pull_back 'lead' it pulls back into its own lane
+    `return_gap` metres ahead of the lead, or at once if it is already past
+    the ego. With 'ego' it stays in the ego's lane, head-on, until it is past
+    the ego. Never finishes on its own.
     """
 
     CHANGE_M = 10.0      # metres travelled while changing lane
 
     def __init__(self, actor, lead, ego, s_of, pull_out_gap, swing_dist, pass_speed, return_gap,
-                 lights, name='OncomingOvertaker'):
+                 lights, pull_back='lead', name='OncomingOvertaker'):
         super().__init__(name, actor)
         self._lead = lead
         self._ego = ego
@@ -377,6 +395,7 @@ class OncomingOvertaker(AtomicBehavior):
         self._pass_speed = pass_speed
         self._return_gap = return_gap
         self._lights = lights
+        self._pull_back = pull_back
         self._map = CarlaDataProvider.get_map()
         self._phase = 'approach'
         self._planner = None
@@ -427,6 +446,7 @@ class OncomingOvertaker(AtomicBehavior):
                 self._phase = 'pass'
                 self._change_lane(into_ego_lane=True)
                 log_event('overtake_swing', ego_dist=round(ego_dist, 1), lead_gap=round(gap, 1),
+                          lead_to_ego=round(lead_loc.distance(ego_loc), 1),
                           speed=round(CarlaDataProvider.get_velocity(self._actor), 1))
                 speed = self._pass_speed
             else:
@@ -439,7 +459,8 @@ class OncomingOvertaker(AtomicBehavior):
         elif self._phase == 'pass':
             speed = self._pass_speed
             past_ego = self._s_of(loc) < self._s_of(ego_loc)
-            if ahead - lengths >= self._return_gap or past_ego:
+            past_lead = self._pull_back == 'lead' and ahead - lengths >= self._return_gap
+            if past_lead or past_ego:
                 self._phase = 'back'
                 self._change_lane(into_ego_lane=False)
                 log_event('overtake_return', ego_dist=round(loc.distance(ego_loc), 1),
@@ -483,13 +504,13 @@ class _GlareScenario(BasicScenario):
         """The oncoming lane at road position s (it runs toward decreasing s)."""
         return along(self._oncoming_wp, -s)
 
-    def _spawn_car(self, s, model):
-        """A car in the oncoming lane at s, moved further out if the spot is taken."""
+    def _spawn_car(self, s, model, role=ROLE, lights=None):
+        """A vehicle in the oncoming lane at s, moved further out if the spot is taken."""
         for shift in (0.0, 5.0, 10.0, 15.0):
             wp = self._oncoming_at(s + shift)
-            car = CarlaDataProvider.request_new_actor(model, wp.transform, rolename=ROLE)
+            car = CarlaDataProvider.request_new_actor(model, wp.transform, rolename=role)
             if car is not None:
-                car.set_light_state(carla.VehicleLightState(self._lights))
+                car.set_light_state(carla.VehicleLightState(self._lights if lights is None else lights))
                 return car, s + shift
         raise ValueError('could not spawn %s in the oncoming lane near s=%.0f m' % (model, s))
 
@@ -693,7 +714,7 @@ class GlarePedestrianPopOut(_GlareScenario):
 
 
 class GlareOncomingOvertake(_GlareScenario):
-    """An oncoming car pulls out of a slower lit car's glare into the ego's lane to overtake it.
+    """An oncoming car or motorcycle pulls out of a slower lit car's glare into the ego's lane to overtake it.
 
     Parameters (route file, all optional):
         distance      trigger point to the meet point M, m (60)
@@ -704,8 +725,13 @@ class GlareOncomingOvertake(_GlareScenario):
         swing_dist    the ego's distance to the overtaker at that moment, m (75)
         pass_speed    the overtaker's top speed, m/s (15)
         return_gap    how far past the lead it pulls back in, m (3)
+        pull_back     'lead': once past the lead; 'ego': only once past the ego, head-on (lead)
+        follower      the overtaker: 'car' or 'motorcycle' (car)
+        follower_lights  the overtaker's headlights, 'on' or 'off' (on); off, it does not glare
         street_lights 'on' (Bench2Drive's) or 'off' along the stretch (on)
-        beams         both cars' 'low' or 'high' beams (low)
+        beams         the lit cars' 'low' or 'high' beams (low)
+
+    The overtaker has HAZARD_ROLE, so the glare agent labels how hidden it is.
     """
 
     DISTANCE = 60.0
@@ -719,13 +745,23 @@ class GlareOncomingOvertake(_GlareScenario):
         self._swing_dist = get_value_parameter(config, 'swing_dist', float, 75.0)
         self._pass_speed = get_value_parameter(config, 'pass_speed', float, 15.0)
         self._return_gap = get_value_parameter(config, 'return_gap', float, 3.0)
+        self._pull_back = get_value_parameter(config, 'pull_back', str, 'lead')
+        self._follower = get_value_parameter(config, 'follower', str, 'car')
+        self._follower_lights = get_value_parameter(config, 'follower_lights', str, 'on')
+        for name, value, allowed in (('pull_back', self._pull_back, ('lead', 'ego')),
+                                     ('follower', self._follower, ('car', 'motorcycle')),
+                                     ('follower_lights', self._follower_lights, ('on', 'off'))):
+            if value not in allowed:
+                raise ValueError('%r must be %s, not %r' % (name, ' or '.join(map(repr, allowed)), value))
         super().__init__('GlareOncomingOvertake', world, ego_vehicles, config, debug_mode,
                          criteria_enable, timeout)
 
     def _initialize_actors(self, config):
         self._lead, self._lead_s = self._spawn_car(self._lead_ahead, CAR_MODEL)
         behind = self._lead_s + self._catch_gap + 2 * self._lead.bounding_box.extent.x
-        self._overtaker, _ = self._spawn_car(behind, CAR_MODEL)
+        model = motorcycle_model() if self._follower == 'motorcycle' else CAR_MODEL
+        self._overtaker_lights = self._lights if self._follower_lights == 'on' else carla.VehicleLightState.NONE
+        self._overtaker, _ = self._spawn_car(behind, model, HAZARD_ROLE, self._overtaker_lights)
         self.other_actors += [self._lead, self._overtaker]
 
     def _create_behavior(self):
@@ -740,7 +776,7 @@ class GlareOncomingOvertake(_GlareScenario):
         main.add_child(OncomingCar(self._lead, self._car_plan(self._lead_s), self._lead_speed, self._lights))
         main.add_child(OncomingOvertaker(self._overtaker, self._lead, ego, self._s, self._pull_out_gap,
                                          self._swing_dist, self._pass_speed, self._return_gap,
-                                         self._lights))
+                                         self._overtaker_lights, self._pull_back))
         main.add_child(DriveDistance(ego, self._distance + 30.0))     # ends once the ego is past M
         self._add_street_lights(main)
         root.add_child(main)

@@ -58,16 +58,22 @@ glare code places it, labelled with its id, verdict and distance (green =
 detected, red = rejected). `glare_debug.jsonl` holds the numbers, including the
 camera position the glare code uses next to where the camera should be.
 
-**Only driving cars glare.** A car counts as driving once it has moved faster
-than 1 m/s during the run. A car waiting at a light that drove there still
-glares, a car pulling out of a parking spot starts glaring when it moves, and
-a parked car never glares, even if Bench2Drive has its lights on.
+**Only driving vehicles with their headlights on glare.** A vehicle counts as
+driving once it has moved faster than 1 m/s during the run. A car waiting at a
+light that drove there still glares, a car pulling out of a parking spot
+starts glaring when it moves, and a parked car never glares, even if
+Bench2Drive has its lights on. A driving vehicle with its low and high beams
+off never glares either. Cars, trucks and buses glare from two headlamps,
+motorcycles from one, bicycles never.
 
 **Headlights.** Bench2Drive's night traffic mostly drives with its headlights
 off, so on its own there is little to glare. `--headlights low` (the default)
-switches on low beams for every driving car within 90 m of the ego, each step,
-and stops CARLA's Traffic Manager from switching them back off; `high` adds
-high beams; `scene` keeps Bench2Drive's lighting. Each run records the mode in
+switches on low beams for every driving car or motorcycle within 90 m of the
+ego, each step, and stops CARLA's Traffic Manager from switching them back
+off; `high` adds high beams; `scene` keeps Bench2Drive's lighting. Scenario
+vehicles whose scenario sets their lights (role `scenario no lights`, such as
+our scenarios' cars) are never switched on, so a car a scenario drives dark
+stays dark and does not glare. Each run records the mode in
 its folder name, and `headlights.json` counts the driving, parked and lit
 cars. Bench2Drive itself turns scenario cars' lights off beyond about 50 m of
 the ego, so those light up only when closer; background traffic stays lit to
@@ -97,7 +103,9 @@ When the routes finish, `run.py` prints one line per run: steps with glaring
 headlights on each front camera, missing frames, and PASS/FAIL. A run passes
 when every frame got its segmentation and depth, every front frame with
 glaring headlights changed, and every front frame without them is identical to
-the clean copy. `python run.py summary <folder>` prints it again for any
+the clean copy. `hidden` and `hazard` count the steps a pedestrian or cyclist,
+or a scenario's hazard vehicle, is mostly washed out by glare, out of the
+steps one is in view (see `../custom_scenarios`). `python run.py summary <folder>` prints it again for any
 folder, including the copy on your Mac.
 
 NpcAgent obeys lights and stops for cars, but ignores pedestrians and cannot
