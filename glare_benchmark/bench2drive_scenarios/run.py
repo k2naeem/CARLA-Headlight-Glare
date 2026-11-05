@@ -377,8 +377,10 @@ def summarize_run(run_dir, root):
     if os.path.exists(hazards):
         with open(hazards, encoding='utf-8') as fh:
             labels = [json.loads(line) for line in fh if line.strip()]
-        row['hazard_steps'] = sum(1 for e in labels if e['pixels'])
-        row['hazard_hidden'] = sum(1 for e in labels if e['hidden'])
+        # Only steps it stands out in the clean frame: otherwise darkness hides it, not glare.
+        visible = [e for e in labels if e['pixels'] and e.get('visible_clean', True)]
+        row['hazard_steps'] = len(visible)
+        row['hazard_hidden'] = sum(1 for e in visible if e.get('glare_occluded', e['hidden']))
 
     # A front frame with glaring headlights must differ from the clean copy;
     # one without must be byte-identical.
@@ -422,7 +424,8 @@ def summarize(root):
             r['missing'], hidden, hazard, 'PASS' if r['pass'] else 'FAIL', ('  (%s)' % ', '.join(notes)) if notes else ''))
     print('front/left/right = steps with glaring headlights on that camera; '
           'hidden = steps a pedestrian or cyclist is mostly washed out / steps one is in view; '
-          'hazard = the same for a scenario\'s hazard vehicle')
+          'hazard = steps a scenario\'s hazard vehicle, visible in the clean frame, is hidden by glare '
+          '/ steps it is visible in the clean frame')
     with open(os.path.join(root, 'summary.csv'), 'w', newline='', encoding='utf-8') as fh:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
         writer.writeheader()

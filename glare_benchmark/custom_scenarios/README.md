@@ -86,7 +86,14 @@ swing, then pulls out of it. The motorcycle (`follower="motorcycle"`) has
 one central headlamp: it stays behind the lead's body until it pulls out,
 then emerges into the glare. With `follower_lights="off"` the overtaker
 drives dark and does not glare itself, so only the lead's glare and the
-street lights show it: the hardest case.
+street lights show it. Use it with the street lights on: with them off too,
+darkness hides it in the clean frame as well, which is not glare.
+
+**Dark head-on (`OvertakeHeadOnDark`, `OvertakeHeadOnMotoDark`).** The two
+head-on routes with the street lights off, as in `PedestrianDark`: the road is
+lit only by headlights. The overtaker keeps its lights on, so the clean frame
+still shows it by its own lamps; the glared frame merges them into the lead's
+glare. Compare each with its lit twin.
 
 Variants are route-file parameters, no code changes needed:
 
@@ -128,6 +135,8 @@ Each spot gets one route per variant:
 | 94001+ | `PedestrianTwoCarsDark` | street lights off, plus a second lit car whose glare covers the step-out |
 | 95001+ | `OvertakeHeadOn` | a car pulls out of the lead's glare onto a head-on course (edit `follower_lights` to `off` for a dark one) |
 | 96001+ | `OvertakeHeadOnMoto` | the same with a motorcycle |
+| 97001+ | `OvertakeHeadOnDark` | `OvertakeHeadOn` with the street lights off |
+| 98001+ | `OvertakeHeadOnMotoDark` | `OvertakeHeadOnMoto` with the street lights off |
 
 Then, from `../bench2drive_scenarios`:
 
@@ -163,10 +172,17 @@ Each run folder is laid out like a Bench2Drive run, plus these label files:
   counted). Few `pixels` means the lead's body hides it; `hidden` means what
   the camera does see is mostly washed out by glare. The line also records
   its distance and whether its lights are on.
+- Both files also record `clean_contrast` and `glared_contrast`: how much the
+  road user or vehicle stands out from the 8 px ring around it, in the clean
+  and the glared frame (0 = not at all). `visible_clean` means it stands out
+  in the clean frame (contrast at least 0.1); when it does not, darkness hides
+  it, not glare. `glare_occluded` means it is visible clean but hidden, or no
+  longer standing out, once glared: the frames that are glare occlusion.
 
 `python run.py summary` adds a `hidden` column, steps with a hidden
-pedestrian or cyclist out of steps with one in view, and a `hazard` column,
-the same for the overtaker. A motorcycle's rider also counts in
+pedestrian or cyclist out of steps with one in view, and a `hazard` column:
+steps the overtaker is `glare_occluded` out of steps it is visible in the clean
+frame. A motorcycle's rider also counts in
 `road_user_glare.jsonl`, as a rider.
 
 NpcAgent ignores pedestrians, so it drives into the pedestrian in every run.
