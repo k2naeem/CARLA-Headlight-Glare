@@ -23,6 +23,11 @@ GlarePedestrianPopOut
     hides them. A larger glare (run.py --glare-size 2) widens that zone to
     ~80 px at 25 m.
 
+    With second_gap > 0 a second lit car follows the first. It is timed to be
+    where its inner lamp lines up with the pedestrian halfway across as they
+    step out, so its glare covers the step-out itself, which the first car,
+    by then beside the ego, cannot.
+
 GlareOncomingOvertake
     A slow lit oncoming car with a second car close behind it, hidden in its
     glare. When the ego is within `swing_dist` of the second car, it pulls out
@@ -172,11 +177,49 @@ class OncomingCar(AtomicBehavior):
         self._planner.set_global_plan(self._plan)
         super().initialise()
 
+    def _target_speed(self):
+        return self._speed
+
     def update(self):
         self._actor.set_light_state(carla.VehicleLightState(self._lights))
-        self._planner.set_speed(self._speed * 3.6)
+        self._planner.set_speed(self._target_speed() * 3.6)
         self._actor.apply_control(self._planner.run_step())
         return py_trees.common.Status.RUNNING
+
+
+class TimedOncomingCar(OncomingCar):
+    """An OncomingCar timed to be `target_dist()` metres from the ego at a moment.
+
+    `seconds_left()` says how far off the moment is, or None while it is not
+    known yet (the car then drives at `speed`). Once known, the speed is set
+    every tick so the car closes the remaining distance in that time, given
+    the ego's current speed; after the moment it keeps its last speed.
+    """
+
+    def __init__(self, actor, plan, speed, lights, ego, target_dist, seconds_left,
+                 speed_range=(3.0, 15.0), name='TimedOncomingCar'):
+        super().__init__(actor, plan, speed, lights, name=name)
+        self._ego = ego
+        self._target_dist = target_dist
+        self._seconds_left = seconds_left
+        self._speed_range = speed_range
+        self._timed = False
+
+    def _target_speed(self):
+        if self._timed:
+            return self._speed
+        seconds = self._seconds_left()
+        if seconds is None:
+            return self._speed
+        dist = CarlaDataProvider.get_location(self._actor).distance(CarlaDataProvider.get_location(self._ego))
+        if seconds <= 0.1:
+            self._timed = True
+            log_event('second_car_at_mark', car_to_ego_m=round(dist, 1), target_m=round(self._target_dist(), 1))
+            return self._speed
+        closing = (dist - self._target_dist()) / seconds
+        self._speed = min(max(closing - CarlaDataProvider.get_velocity(self._ego), self._speed_range[0]),
+                          self._speed_range[1])
+        return self._speed
 
 
 class StreetLightsOff(AtomicBehavior):
@@ -244,13 +287,28 @@ class StepIntoPath(AtomicBehavior):
             self._actor.set_target_velocity(self._direction * speed)
             self._actor.apply_control(carla.VehicleControl(throttle=1.0))    # makes the rider pedal
 
+    def _ego_time_to_reach(self):
+        """(seconds until the ego's front reaches this actor at its speed, the gap, the ego's speed)."""
+        ego = CarlaDataProvider.get_location(self._ego)
+        ego_speed = CarlaDataProvider.get_velocity(self._ego)
+        gap = (self._s_of(CarlaDataProvider.get_location(self._actor)) - self._s_of(ego)
+               - self._ego.bounding_box.extent.x)
+        return gap / max(ego_speed, 0.1), gap, ego_speed
+
+    def seconds_to_start(self):
+        """Seconds until it sets off at the ego's current speed; None before it is in place."""
+        if self._start is None:
+            return None
+        if self._origin is not None:
+            return 0.0
+        ttc = self._ego_time_to_reach()[0]
+        wait_left = self._max_wait - (GameTime.get_time() - self._start)
+        return max(min(ttc - self._distance / self._speed - self._arrive_before, wait_left), 0.0)
+
     def update(self):
         location = CarlaDataProvider.get_location(self._actor)
         if self._origin is None:
-            ego = CarlaDataProvider.get_location(self._ego)
-            ego_speed = CarlaDataProvider.get_velocity(self._ego)
-            gap = self._s_of(location) - self._s_of(ego) - self._ego.bounding_box.extent.x
-            ttc = gap / max(ego_speed, 0.1)
+            ttc, gap, ego_speed = self._ego_time_to_reach()
             waited = GameTime.get_time() - self._start
             if ttc > self._distance / self._speed + self._arrive_before and waited < self._max_wait:
                 return py_trees.common.Status.RUNNING
@@ -468,6 +526,9 @@ class GlarePedestrianPopOut(_GlareScenario):
         speed          the adversary's speed, m/s (2.5 walker, a brisk jog; 3.5 bicycle)
         arrive_before  seconds before the ego would reach it that it stops in the ego's lane (0.5)
         hold           seconds a walker stands in the ego's lane before walking on (3)
+        second_gap     a second lit car this far behind the first at the start, m (0 = none)
+        second_dist    its distance to the ego when the adversary steps out, m ('auto':
+                       where its inner lamp lines up with the adversary halfway across)
         street_lights  'on' (Bench2Drive's) or 'off' along the stretch (on)
         beams          the car's 'low' or 'high' beams (low)
     """
@@ -483,6 +544,8 @@ class GlarePedestrianPopOut(_GlareScenario):
         self._speed = get_value_parameter(config, 'speed', float, 2.5 if self._kind == 'walker' else 3.5)
         self._arrive_before = get_value_parameter(config, 'arrive_before', float, 0.5)
         self._hold = get_value_parameter(config, 'hold', float, 3.0)
+        self._second_gap = get_value_parameter(config, 'second_gap', float, 0.0)
+        self._second_dist = get_value_parameter(config, 'second_dist', str, 'auto')
         if self._kind not in ('walker', 'bicycle'):
             raise ValueError("'adversary' must be 'walker' or 'bicycle', not %r" % self._kind)
         super().__init__('GlarePedestrianPopOut', world, ego_vehicles, config, debug_mode,
@@ -508,6 +571,11 @@ class GlarePedestrianPopOut(_GlareScenario):
 
     def _initialize_actors(self, config):
         self._car, self._car_s = self._spawn_car(self._car_ahead, CAR_MODEL)
+        self._second = None
+        if self._second_gap > 0:
+            behind = self._car_s + 2 * self._car.bounding_box.extent.x + self._second_gap
+            self._second, self._second_s = self._spawn_car(behind, CAR_MODEL)
+            self.other_actors.append(self._second)
         # Spawn the adversary once at a spot like the one it will appear at, to
         # check it can stand there, then hide it until the release.
         first = self._place(self._oncoming_at(-self._release_dist).transform.location)
@@ -531,13 +599,33 @@ class GlarePedestrianPopOut(_GlareScenario):
         self._adversary = adversary
         self.other_actors += [self._adversary, self._car]
 
+    def _second_mark(self):
+        """How far from the ego the second car should be as the adversary steps out.
+
+        With 'auto': far enough that, seen from the ego, its inner headlamp lines
+        up with the adversary halfway across. The adversary then steps out
+        about (crossing time + arrive_before) x ego speed ahead of the ego,
+        which is why the mark moves with the ego's speed.
+        """
+        if self._second_dist != 'auto':
+            return float(self._second_dist)
+        ego = self.ego_vehicles[0]
+        crossing_s = self._lateral() / self._speed + self._arrive_before
+        depth = CarlaDataProvider.get_velocity(ego) * crossing_s + ego.bounding_box.extent.x
+        lamp = (self._meet_wp.lane_width / 2.0 + self._oncoming_wp.lane_width / 2.0
+                - 0.6)                                    # inner lamp, ~0.6 m in from the car's centre line
+        return min(max(lamp * depth / (self._lateral() / 2.0), 15.0), 45.0)
+
     def _state(self):
         ego = CarlaDataProvider.get_location(self.ego_vehicles[0])
         car = CarlaDataProvider.get_location(self._car)
         adversary = CarlaDataProvider.get_location(self._adversary)
-        return {'car_to_ego_m': round(car.distance(ego), 1),
-                'adversary_to_ego_m': round(adversary.distance(ego), 1),
-                'ego_speed_ms': round(CarlaDataProvider.get_velocity(self.ego_vehicles[0]), 1)}
+        state = {'car_to_ego_m': round(car.distance(ego), 1),
+                 'adversary_to_ego_m': round(adversary.distance(ego), 1),
+                 'ego_speed_ms': round(CarlaDataProvider.get_velocity(self.ego_vehicles[0]), 1)}
+        if self._second is not None:
+            state['second_car_to_ego_m'] = round(CarlaDataProvider.get_location(self._second).distance(ego), 1)
+        return state
 
     def _create_behavior(self):
         ego = self.ego_vehicles[0]
@@ -562,12 +650,17 @@ class GlarePedestrianPopOut(_GlareScenario):
 
         to_centre = self._lateral()
         off_road = self._meet_wp.lane_width / 2.0 + 2.0
+        step = StepIntoPath(self._adversary, ego, self._s, to_centre, self._speed, self._arrive_before)
+        if self._second is not None:
+            # Timed to be second_dist from the ego as the adversary steps out:
+            # from there its lamps line up with the adversary mid-crossing.
+            main.add_child(TimedOncomingCar(self._second, self._car_plan(self._second_s), self._car_speed,
+                                            self._lights, ego, self._second_mark, step.seconds_to_start))
         popout = py_trees.composites.Sequence(name='Adversary')
         popout.add_child(release)
         popout.add_child(PlaceBehindCar(self._adversary, self._car, self._place))
         popout.add_child(LogEvent('popout_start', self._state))
-        popout.add_child(StepIntoPath(self._adversary, ego, self._s, to_centre, self._speed,
-                                      self._arrive_before))
+        popout.add_child(step)
         popout.add_child(LogEvent('popout_in_lane', self._state))
         if self._kind == 'bicycle':      # a cyclist rides on across
             popout.add_child(KeepVelocity(self._adversary, self._speed, force_speed=True, distance=off_road))
@@ -583,6 +676,8 @@ class GlarePedestrianPopOut(_GlareScenario):
             root.add_child(ChangeOppositeBehavior(active=True))
         root.add_child(ActorDestroy(self._adversary))
         root.add_child(ActorDestroy(self._car))
+        if self._second is not None:
+            root.add_child(ActorDestroy(self._second))
         return root
 
 
