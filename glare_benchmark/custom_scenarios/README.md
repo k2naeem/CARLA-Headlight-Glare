@@ -16,7 +16,9 @@ every run.
 
 Both run at night on a straight road with one lane each way. The glare
 source is a car the scenario drives itself, headlights on, so the timing is
-the same every run, whatever speed the ego drives.
+the same every run, whatever speed the ego drives. A vehicle glares only
+while its headlights are on: the glare agent never switches on the lights of
+a vehicle the scenario drives, so one it drives dark stays dark.
 
 **`GlarePedestrianPopOut`** — a pedestrian steps out from behind an oncoming
 car, inside its glare. Nobody stands in the road beforehand: the pedestrian
@@ -67,6 +69,22 @@ second lit car catching up behind it, hidden in its glare. When the ego is
 up to 15 m/s, and pulls back in once past. An ego that brakes keeps about
 20 m clear; one at 8 m/s that doesn't react misses it by about 2 m.
 
+**Head-on (`OvertakeHeadOn`, `OvertakeHeadOnMoto`).** The same, but the
+overtaker pulls out later, at 55 m (the lead is then about 45 m away), and
+stays in the ego's lane until it is past the ego (`pull_back="ego"`): a
+head-on course. It does not bail out, so an ego that stays in its lane hits
+it, about 2–2.8 s after the swing at ego speeds of 5–8 m/s. Braking alone
+does not avoid it. A late bail-out is planned for when DeepSight drives.
+
+Seen from the ego, perspective puts the follower's inner headlamp just beside
+the lead's inner lamp while it follows. In the offline sim at
+`--glare-size 2`, it sits inside the lead's glare for 2–3 s before the
+swing, then pulls out of it. The motorcycle (`follower="motorcycle"`) has
+one central headlamp: it stays behind the lead's body until it pulls out,
+then emerges into the glare. With `follower_lights="off"` the overtaker
+drives dark and does not glare itself, so only the lead's glare and the
+street lights show it: the hardest case.
+
 Variants are route-file parameters, no code changes needed:
 
 | Parameter | Scenario | Default | Other values |
@@ -80,7 +98,10 @@ Variants are route-file parameters, no code changes needed:
 | `street_lights` | both | `on` | `off`: no street lights along the stretch, lit only by headlights |
 | `lead_speed`, `pass_speed` | overtake | 5, 15 m/s | |
 | `swing_dist`, `pull_out_gap`, `catch_gap`, `return_gap` | overtake | 75, 5, 25, 3 m | |
-| `beams` | both | `low` | `high` |
+| `pull_back` | overtake | `lead` (back in once past the lead) | `ego`: stays in the ego's lane until past the ego, head-on |
+| `follower` | overtake | `car` | `motorcycle` |
+| `follower_lights` | overtake | `on` | `off`: the overtaker drives dark and does not glare |
+| `beams` | both | `low` | `high` (the lit cars') |
 
 The full list, with what each means, is in each class's docstring in
 `glare_popout.py`.
@@ -94,7 +115,7 @@ python make_routes.py
 ```
 
 It prints each spot it picked, two per town in Town01, 02, 03, 05 and 10HD.
-Each spot gets three routes:
+Each spot gets one route per variant:
 
 | Ids | Variant | |
 | --- | --- | --- |
@@ -102,6 +123,8 @@ Each spot gets three routes:
 | 92001+ | `Overtake` | the oncoming overtake |
 | 93001+ | `PedestrianLit` | the pedestrian under Bench2Drive's street lights (the easier case) |
 | 94001+ | `PedestrianTwoCarsDark` | street lights off, plus a second lit car whose glare covers the step-out |
+| 95001+ | `OvertakeHeadOn` | a car pulls out of the lead's glare onto a head-on course (edit `follower_lights` to `off` for a dark one) |
+| 96001+ | `OvertakeHeadOnMoto` | the same with a motorcycle |
 
 Then, from `../bench2drive_scenarios`:
 
@@ -118,7 +141,7 @@ scene` keeps the background traffic as Bench2Drive lights it (mostly dark), so
 the scenario's cars are the only glare. One route is a family member like any
 other: `python run.py run 91001`.
 
-Each run folder is laid out like a Bench2Drive run, plus two label files:
+Each run folder is laid out like a Bench2Drive run, plus these label files:
 - `scenario_events.jsonl`: one line per moment (`street_lights_off`,
   `popout_start`, `second_car_at_mark`, `popout_walk`, `popout_in_lane`, `popout_clear`, `overtake_swing`,
   `overtake_return`) with its CARLA frame, which matches the `frame` in
@@ -130,12 +153,23 @@ Each run folder is laid out like a Bench2Drive run, plus two label files:
   DeepSight reads. The line records the pixel count, the mean cover, the share
   of pixels at least half way to white (`washed`), and `hidden` (half or more
   washed). It needs glare on, since the segmentation camera only runs then.
+- `hazard_glare.jsonl`: the same for the overtaker, on every step it is in
+  front of CAM_FRONT within 70 m, lights on or off. `footprint_px` is the
+  area of its projected box, and `pixels` is how much of it the camera sees
+  (segmentation plus matching depth, so the lead car in front of it is not
+  counted). Few `pixels` means the lead's body hides it; `hidden` means what
+  the camera does see is mostly washed out by glare. The line also records
+  its distance and whether its lights are on.
 
-`python run.py summary` adds a `hidden` column: steps with a hidden
-pedestrian or cyclist out of steps with one in view.
+`python run.py summary` adds a `hidden` column, steps with a hidden
+pedestrian or cyclist out of steps with one in view, and a `hazard` column,
+the same for the overtaker. A motorcycle's rider also counts in
+`road_user_glare.jsonl`, as a rider.
 
 NpcAgent ignores pedestrians, so it drives into the pedestrian in every run.
-This is expected: for now the runs are about the images. Brakes and
+It brakes for a vehicle in its lane, but on the head-on routes that is not
+enough, so those runs usually end in a collision too. This is expected: for
+now the runs are about the images. Brakes and
 collisions mean something once DeepSight drives.
 
 ## How it plugs into Bench2Drive
@@ -152,6 +186,7 @@ A new scenario is a new class in `glare_popout.py` built from the same
 pieces:
 - `_GlareScenario`: the meet point M on a two-way road, and road position `s`
 - `OncomingCar`: a lit car, optionally timed to be at a place when the ego is
+- `HAZARD_ROLE`: spawn a vehicle with it and the glare agent labels how hidden it is
 - `LogEvent`: a frame-stamped moment for the dataset
 
 Then add the class and its default parameters to `SCENARIOS` in

@@ -15,8 +15,8 @@ it later. See [its README](bench2drive_scenarios/README.md).
 
 **custom_scenarios/** covers what Bench2Drive cannot guarantee: glare and the
 hazard at the same moment. Two scenarios are built: a pedestrian stepping out
-from behind oncoming headlights, and an oncoming car pulling out of another
-car's glare to overtake. `run.py` runs them like Bench2Drive's
+from behind oncoming headlights, and an oncoming car or motorcycle pulling
+out of another car's glare to overtake, in one variant onto a head-on course. `run.py` runs them like Bench2Drive's
 (`python run.py run glare_popout`). High beams on bends, unlit roads, fixed
 oncoming stacks and sun glare are still planned. See
 [its README](custom_scenarios/README.md).

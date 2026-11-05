@@ -55,6 +55,14 @@ GLARE_CAMERAS = ('CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT')
 _LOW_BEAM = int(carla.VehicleLightState.LowBeam)
 _HIGH_BEAM = int(carla.VehicleLightState.HighBeam)
 
+
+def headlamp_count(actor):
+    """How many headlights `actor` has: 2 on four wheels, 1 on a motorcycle, 0 on a bicycle."""
+    if int(actor.attributes.get('number_of_wheels', 4)) >= 4:
+        return 2
+    return 1 if actor.attributes.get('base_type') == 'motorcycle' else 0
+
+
 # How many frames of seg/depth to keep while waiting. Older ones are dropped.
 _MAX_BUFFERED_FRAMES = 10
 
@@ -152,7 +160,7 @@ class GlareInjector:
         self._cond = threading.Condition()
         self._records_frame = None
         self._records = []
-        self._static = {}            # actor id -> (bbox extent, bbox centre, 4+ wheels)
+        self._static = {}            # actor id -> (bbox extent, bbox centre, headlamp count)
 
         self.cameras = {}
         rgb_specs = {s['id']: s for s in sensor_specs
@@ -274,8 +282,9 @@ class GlareInjector:
     def _vehicle_records(self, frame):
         """Every car that could glare, read once per frame and shared by all cameras.
 
-        Skips the ego, anything under four wheels (bicycles, motorcycles), and
-        any car whose headlights are off. In synchronous mode the world does not
+        Skips the ego, bicycles, and any vehicle whose low or high beams are
+        off: a vehicle glares only with its headlights on. A motorcycle glares
+        from one lamp. In synchronous mode the world does not
         move until the next tick, so these positions match the frame's images.
         """
         if self._records_frame == frame:
@@ -290,14 +299,13 @@ class GlareInjector:
                     continue
                 if actor.id not in self._static:
                     bb = actor.bounding_box
-                    wheels = int(actor.attributes.get('number_of_wheels', 4))
                     self._static[actor.id] = (
                         (bb.extent.x, bb.extent.y, bb.extent.z),
                         (bb.location.x, bb.location.y, bb.location.z),
-                        wheels >= 4,
+                        headlamp_count(actor),
                     )
-                extent, bb_center, four_wheels = self._static[actor.id]
-                if not four_wheels or not self._lights_on(actor):
+                extent, bb_center, lamps = self._static[actor.id]
+                if not lamps or not self._lights_on(actor):
                     continue
                 tf = actor.get_transform()
                 fwd = tf.get_forward_vector()
@@ -306,6 +314,7 @@ class GlareInjector:
                     'matrix': tf.get_matrix(),
                     'extent': extent,
                     'bb_center': bb_center,
+                    'lamps': lamps,
                     'forward': (fwd.x, fwd.y, fwd.z),
                     'location': (tf.location.x, tf.location.y, tf.location.z),
                 })

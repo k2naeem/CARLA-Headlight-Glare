@@ -30,6 +30,7 @@ reference:
   * Severity. glare(..., severity=s) scales every glare layer by s; 0 returns
     the input unchanged. SEVERITY_LEVELS holds the levels for the sweep.
   * Trucks and buses count as vehicles (VEHICLE_TAGS), not just cars.
+  * Motorcycles glare from one central lamp (a record with 'lamps': 1).
 
 With focal_px left at its default, severity=1 and 3-element points, output is
 identical to glare_mask.py.
@@ -47,10 +48,14 @@ PEDESTRIAN_TAG = 12
 RIDER_TAG = 13
 BICYCLE_TAG = 19
 
-# Everything that can carry headlights: car, truck, bus. Motorcycles (18) are
-# left out: they have one central light, and the two-lamp model below would
-# place two. Vehicle records are already filtered to 4+ wheels upstream.
+# Four-wheelers that carry two headlights: car, truck, bus.
 VEHICLE_TAGS = (14, 15, 16)
+# A motorcycle has one central headlight (a record with 'lamps': 1). Its rider
+# covers much of it seen head-on, so both count as the motorcycle.
+MOTORCYCLE_TAG = 18
+TWO_WHEELER_TAGS = (MOTORCYCLE_TAG, RIDER_TAG)
+# Where a headlight's glare seed may sit: on any vehicle that has one.
+HEADLAMP_TAGS = VEHICLE_TAGS + TWO_WHEELER_TAGS
 
 
 # ---------------------------------------------------------------------------
@@ -142,12 +147,14 @@ def build_camera_intrinsics(width, height, fov_deg):
     return K
 
 
-def headlight_points_local(extent, bb_center=(0.0, 0.0, 0.0)):
-    """Return the two headlight positions in the vehicle's LOCAL frame."""
+def headlight_points_local(extent, bb_center=(0.0, 0.0, 0.0), lamps=2):
+    """Return the headlight positions in the vehicle's LOCAL frame: two, or one central (motorcycle)."""
     ex, ey, ez = extent
     cx, cy, cz = bb_center
     x = cx + FORWARD_FRAC * ex
     z = cz + HEIGHT_FRAC * ez
+    if lamps == 1:
+        return [(x, cy, z)]
     y_off = LATERAL_FRAC * ey
     return [
         (x, cy + y_off, z),
@@ -201,7 +208,8 @@ def headlight_pixels_for_vehicles(vehicle_records, cam_matrix_world, K,
     Facing is NOT checked here — camera_detected_headlights() gates on it first.
 
     If a record carries an 'id' (the CARLA actor id), each point gets a fourth
-    element, the key (actor_id, side) with side 0 = right lamp, 1 = left lamp.
+    element, the key (actor_id, side) with side 0 = right lamp, 1 = left lamp
+    (a one-lamp record's only lamp is side 0).
     The key is attached here, before any point is filtered out, because after
     filtering there is no way to tell which lamp a surviving point was.
     """
@@ -210,7 +218,8 @@ def headlight_pixels_for_vehicles(vehicle_records, cam_matrix_world, K,
     keys = []
 
     for rec in vehicle_records:
-        local_pts = headlight_points_local(rec['extent'], rec.get('bb_center', (0.0, 0.0, 0.0)))
+        local_pts = headlight_points_local(rec['extent'], rec.get('bb_center', (0.0, 0.0, 0.0)),
+                                           rec.get('lamps', 2))
         M = np.asarray(rec['matrix'], dtype=np.float64)
         actor_id = rec.get('id')
         for side, (lx, ly, lz) in enumerate(local_pts):
@@ -321,23 +330,28 @@ def project_vehicle_footprint(rec, cam_matrix_world, K, image_size):
 
 
 def count_detected_vehicle_pixels(footprint, depth_map, seg_labels, image_size,
-                                  depth_tol_m=2.5, depth_tol_frac=0.10):
+                                  depth_tol_m=2.5, depth_tol_frac=0.10, tags=VEHICLE_TAGS):
     """How many pixels the camera actually attributes to THIS vehicle.
 
     A pixel counts only when segmentation labels it a vehicle AND the depth
     buffer there agrees with this vehicle's own bbox depth span. The depth term
     is what makes the count instance-specific rather than "some car is here".
     """
+    return int(np.count_nonzero(detected_vehicle_mask(footprint, depth_map, seg_labels, image_size,
+                                                      depth_tol_m, depth_tol_frac, tags)))
+
+
+def detected_vehicle_mask(footprint, depth_map, seg_labels, image_size,
+                          depth_tol_m=2.5, depth_tol_frac=0.10, tags=VEHICLE_TAGS):
+    """The pixels of count_detected_vehicle_pixels(), as a bool array over the footprint rect."""
     x0, y0, x1, y1, d_near, d_far = footprint
 
     if seg_labels is not None:
-        vehicle_px = np.isin(seg_labels[y0:y1, x0:x1], VEHICLE_TAGS)
+        vehicle_px = np.isin(seg_labels[y0:y1, x0:x1], tags)
     else:
         vehicle_px = np.ones((y1 - y0, x1 - x0), dtype=bool)
-    if not vehicle_px.any():
-        return 0
-    if depth_map is None:
-        return int(np.count_nonzero(vehicle_px))
+    if not vehicle_px.any() or depth_map is None:
+        return vehicle_px
 
     # Depth is stored downscaled; crop the matching region and blow it back up
     # to the footprint size. INTER_NEAREST throughout — averaging depth across a
@@ -352,7 +366,7 @@ def count_detected_vehicle_pixels(footprint, depth_map, seg_labels, image_size,
     dx1 = min(depth_w, max(int(np.ceil(x1 * scale_x)), dx0 + 1))
     dy1 = min(depth_h, max(int(np.ceil(y1 * scale_y)), dy0 + 1))
     if dx0 >= dx1 or dy0 >= dy1:
-        return 0
+        return np.zeros_like(vehicle_px)
 
     depth_crop = depth_map[dy0:dy1, dx0:dx1].astype(np.float32)
     depth_crop = cv2.resize(depth_crop, (vehicle_px.shape[1], vehicle_px.shape[0]),
@@ -360,7 +374,7 @@ def count_detected_vehicle_pixels(footprint, depth_map, seg_labels, image_size,
 
     tol = max(depth_tol_m, depth_tol_frac * d_near)
     on_this_vehicle = (depth_crop >= d_near - tol) & (depth_crop <= d_far + tol)
-    return int(np.count_nonzero(vehicle_px & on_this_vehicle))
+    return vehicle_px & on_this_vehicle
 
 
 def camera_detected_headlights(vehicle_records, cam_matrix_world, K, image_size,
@@ -427,6 +441,7 @@ def camera_detected_headlights(vehicle_records, cam_matrix_world, K, image_size,
         detected_px = count_detected_vehicle_pixels(
             footprint, depth_map, seg_labels, image_size,
             depth_tol_m=depth_tol_m, depth_tol_frac=depth_tol_frac,
+            tags=TWO_WHEELER_TAGS if rec.get('lamps', 2) == 1 else VEHICLE_TAGS,
         )
         report['detected_px'] = detected_px
         if detected_px < min_detected_px:
@@ -485,7 +500,7 @@ def geometry_glare_mask(rgb_image, seg_image, headlight_pixels,
     mask_bool = region
     if require_vehicle:
         labels = _to_labels(seg_image)
-        mask_bool = mask_bool & np.isin(labels, VEHICLE_TAGS)
+        mask_bool = mask_bool & np.isin(labels, HEADLAMP_TAGS)
     if require_bright:
         mask_bool = mask_bool & (gray >= brightness_thresh)
 
