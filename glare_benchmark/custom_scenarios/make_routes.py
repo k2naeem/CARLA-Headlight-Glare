@@ -44,14 +44,16 @@ VARIANTS = {
         'swing_dist': 75, 'pass_speed': 15, 'return_gap': 3, 'street_lights': 'on', 'beams': 'low'}),
     # Bench2Drive's street lights: the pedestrian is lit from above, the easier case.
     'PedestrianLit': ('GlarePedestrianPopOut', 93000, dict(PEDESTRIAN, street_lights='on')),
-    # A second lit car 30 m behind, timed so its glare covers the step-out itself.
+    # A second lit car 24 m behind, timed to be a few metres behind the pedestrian as they step
+    # out, so its glare covers the step-out itself.
     'PedestrianTwoCarsDark': ('GlarePedestrianPopOut', 94000,
-                              dict(PEDESTRIAN, second_gap=30, second_dist='auto', street_lights='off')),
+                              dict(PEDESTRIAN, second_gap=24, second_dist='auto', line_up=0.25,
+                                   street_lights='off')),
 }
 LEAD_IN_M = 30.0      # route before the trigger point, so the ego is up to speed
 BEFORE_M = LEAD_IN_M + max(p['distance'] for _, _, p in VARIANTS.values())   # route start to M
 AFTER_M = 90.0        # M to the route end; also room for the oncoming cars to wait (the
-                      # second car of PedestrianTwoCarsDark starts ~70-85 m past M)
+                      # second car of PedestrianTwoCarsDark starts ~65 m past M)
 MAX_TURN_DEG = 8.0    # how much the road may bend over the whole stretch
 MIN_SPACING_M = 250.0 # between two spots in one town
 
