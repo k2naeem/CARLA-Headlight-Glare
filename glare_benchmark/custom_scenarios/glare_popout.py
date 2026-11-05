@@ -7,9 +7,11 @@ headlamps as seen from the ego's front camera:
 GlarePedestrianPopOut
     A lit oncoming car drives toward the ego. When it is `release_dist` metres
     from the ego, a pedestrian (or cyclist) appears just behind its rear
-    bumper, right beside its flank (between the car and the centre line), and
-    walks into the ego's lane. Seen from CAM_FRONT the pedestrian starts next
-    to the car's inner headlamp, inside its glare, and walks out of it.
+    bumper, right beside its flank (between the car and the centre line). Seen
+    from CAM_FRONT they appear next to the car's inner headlamp, inside its
+    glare. They wait there, then hurry into the ego's lane, timed from the
+    ego's speed to stop right in front of it `arrive_before` seconds before
+    the ego reaches them.
 
     The glare only takes a pedestrian's contrast away within ~40 px of a lamp
     (measured with glare(): contrast against the local brightness drops to
@@ -18,7 +20,8 @@ GlarePedestrianPopOut
     the edge of the image. Hence release_dist 30 and a start tight against the
     car. The release follows the car, not the ego, so it lines up at any ego
     speed. The clean frame shows the pedestrian throughout; only the glare
-    hides them.
+    hides them. A larger glare (run.py --glare-size 2) widens that zone to
+    ~80 px at 25 m.
 
 GlareOncomingOvertake
     A slow lit oncoming car with a second car close behind it, hidden in its
@@ -201,6 +204,64 @@ class StreetLightsOff(AtomicBehavior):
     def update(self):
         if self._lights:
             self._manager.turn_off(self._lights)
+        return py_trees.common.Status.RUNNING
+
+
+class StepIntoPath(AtomicBehavior):
+    """Waits, then crosses `distance` metres into the ego's path, timed to arrive just ahead of it.
+
+    It sets off once the ego's time to reach it (gap / ego speed) is down to its
+    own crossing time plus `arrive_before` seconds, so an ego that keeps its
+    speed finds it stopped right in front, `arrive_before` seconds before
+    impact. It sets off anyway after `max_wait` seconds, for an ego that has
+    stopped. It moves along its heading at `speed` m/s and succeeds on
+    arrival: a walker standing still, a bicycle still riding.
+    """
+
+    def __init__(self, actor, ego, s_of, distance, speed, arrive_before, max_wait=8.0,
+                 name='StepIntoPath'):
+        super().__init__(name, actor)
+        self._ego = ego
+        self._s_of = s_of
+        self._distance = distance
+        self._speed = speed
+        self._arrive_before = arrive_before
+        self._max_wait = max_wait
+        self._walker = 'walker' in actor.type_id
+        self._start = self._origin = self._direction = None
+
+    def initialise(self):
+        self._start = GameTime.get_time()
+        self._origin = None
+        fwd = CarlaDataProvider.get_transform(self._actor).get_forward_vector()
+        self._direction = carla.Vector3D(fwd.x, fwd.y, 0.0)
+        super().initialise()
+
+    def _move(self, speed):
+        if self._walker:
+            self._actor.apply_control(carla.WalkerControl(direction=self._direction, speed=speed))
+        else:
+            self._actor.set_target_velocity(self._direction * speed)
+            self._actor.apply_control(carla.VehicleControl(throttle=1.0))    # makes the rider pedal
+
+    def update(self):
+        location = CarlaDataProvider.get_location(self._actor)
+        if self._origin is None:
+            ego = CarlaDataProvider.get_location(self._ego)
+            ego_speed = CarlaDataProvider.get_velocity(self._ego)
+            gap = self._s_of(location) - self._s_of(ego) - self._ego.bounding_box.extent.x
+            ttc = gap / max(ego_speed, 0.1)
+            waited = GameTime.get_time() - self._start
+            if ttc > self._distance / self._speed + self._arrive_before and waited < self._max_wait:
+                return py_trees.common.Status.RUNNING
+            self._origin = location
+            log_event('popout_walk', ego_time_to_reach_s=round(ttc, 2), gap_m=round(gap, 1),
+                      ego_speed_ms=round(ego_speed, 1), waited_s=round(waited, 1))
+        if location.distance(self._origin) >= self._distance:
+            if self._walker:
+                self._move(0.0)
+            return py_trees.common.Status.SUCCESS
+        self._move(self._speed)
         return py_trees.common.Status.RUNNING
 
 
@@ -404,7 +465,8 @@ class GlarePedestrianPopOut(_GlareScenario):
         ped_offset     how far past the centre line, toward the car, it appears, m
                        ('auto': 0.15 m clear of the car's flank)
         adversary      'walker' or 'bicycle' (walker)
-        speed          the adversary's speed, m/s (1.8 walker, 3.0 bicycle)
+        speed          the adversary's speed, m/s (2.5 walker, a brisk jog; 3.5 bicycle)
+        arrive_before  seconds before the ego would reach it that it stops in the ego's lane (0.5)
         hold           seconds a walker stands in the ego's lane before walking on (3)
         street_lights  'on' (Bench2Drive's) or 'off' along the stretch (on)
         beams          the car's 'low' or 'high' beams (low)
@@ -418,7 +480,8 @@ class GlarePedestrianPopOut(_GlareScenario):
         self._behind = get_value_parameter(config, 'behind', float, 0.5)
         self._ped_offset = get_value_parameter(config, 'ped_offset', str, 'auto')
         self._kind = get_value_parameter(config, 'adversary', str, 'walker')
-        self._speed = get_value_parameter(config, 'speed', float, 1.8 if self._kind == 'walker' else 3.0)
+        self._speed = get_value_parameter(config, 'speed', float, 2.5 if self._kind == 'walker' else 3.5)
+        self._arrive_before = get_value_parameter(config, 'arrive_before', float, 0.5)
         self._hold = get_value_parameter(config, 'hold', float, 3.0)
         if self._kind not in ('walker', 'bicycle'):
             raise ValueError("'adversary' must be 'walker' or 'bicycle', not %r" % self._kind)
@@ -503,12 +566,12 @@ class GlarePedestrianPopOut(_GlareScenario):
         popout.add_child(release)
         popout.add_child(PlaceBehindCar(self._adversary, self._car, self._place))
         popout.add_child(LogEvent('popout_start', self._state))
-        if self._kind == 'bicycle':      # a cyclist rides straight across
-            popout.add_child(KeepVelocity(self._adversary, self._speed, force_speed=True,
-                                          distance=to_centre + off_road))
-        else:                            # a walker stops in the ego's lane, then walks off the road
-            popout.add_child(KeepVelocity(self._adversary, self._speed, distance=to_centre))
-            popout.add_child(LogEvent('popout_in_lane', self._state))
+        popout.add_child(StepIntoPath(self._adversary, ego, self._s, to_centre, self._speed,
+                                      self._arrive_before))
+        popout.add_child(LogEvent('popout_in_lane', self._state))
+        if self._kind == 'bicycle':      # a cyclist rides on across
+            popout.add_child(KeepVelocity(self._adversary, self._speed, force_speed=True, distance=off_road))
+        else:                            # a walker stands in the ego's lane, then walks off the road
             popout.add_child(Idle(self._hold))
             popout.add_child(KeepVelocity(self._adversary, self._speed, distance=off_road))
         popout.add_child(LogEvent('popout_clear', self._state))

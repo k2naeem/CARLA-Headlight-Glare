@@ -275,6 +275,8 @@ class GlareAgent(NpcAgent):
         """Clean | glared CAM_FRONT, decoded from the saved JPEGs."""
         writer = None
         level = os.environ.get('GLARE_SEVERITY', '1.0')
+        if float(os.environ.get('GLARE_SIZE', '1.0')) != 1.0:
+            level += ' x%s' % os.environ['GLARE_SIZE']
         for step in range(n_steps):
             clean = cv2.imread(os.path.join(self.clean_dir, '%05d.jpg' % step))
             glared = cv2.imread(os.path.join(self.save_dir, 'camera', 'CAM_FRONT', '%05d.jpg' % step))
