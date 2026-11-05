@@ -57,6 +57,11 @@ VARIANTS = {
     'OvertakeHeadOn': ('GlareOncomingOvertake', 95000, HEAD_ON),
     # The same with a motorcycle: one headlamp, hidden behind the lead until it pulls out.
     'OvertakeHeadOnMoto': ('GlareOncomingOvertake', 96000, dict(HEAD_ON, follower='motorcycle')),
+    # The two head-on routes with the street lights off, as in PedestrianDark: lit only by
+    # headlights. The overtaker keeps its lights on, so it is still visible in the clean frame.
+    'OvertakeHeadOnDark': ('GlareOncomingOvertake', 97000, dict(HEAD_ON, street_lights='off')),
+    'OvertakeHeadOnMotoDark': ('GlareOncomingOvertake', 98000,
+                               dict(HEAD_ON, follower='motorcycle', street_lights='off')),
 }
 LEAD_IN_M = 30.0      # route before the trigger point, so the ego is up to speed
 BEFORE_M = LEAD_IN_M + max(p['distance'] for _, _, p in VARIANTS.values())   # route start to M

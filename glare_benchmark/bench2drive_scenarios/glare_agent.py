@@ -68,6 +68,11 @@ DRIVING_SPEED_MS = 1.0             # above this once = driving, not parked
 # CARLA 0.9.15 semantic classes of the road users glare can hide.
 ROAD_USER_LABELS = (12, 13, 19)    # pedestrian, rider, bicycle
 WASHED_COVER = 0.5                 # a pixel pushed at least half way to white is washed out
+# Contrast of a road user against the RING_PX ring of pixels around it, (a - b) / (a + b + 20)
+# on grey levels (the 20 keeps JPEG noise in near-black scenes from counting). Below
+# VISIBLE_CONTRAST it does not stand out: in the clean frame that is darkness, not glare.
+RING_PX = 8
+VISIBLE_CONTRAST = 0.1
 # Scenario vehicles whose lights their scenario sets (Bench2Drive's convention),
 # and among them the hazard a scenario wants labelled (custom_scenarios/glare_popout.py).
 OWN_LIGHTS_ROLE = 'scenario no lights'
@@ -77,6 +82,14 @@ HEADLIGHTS = {
     'high': (carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam
              | carla.VehicleLightState.HighBeam),
 }
+
+
+def _contrast(gray, mask, ring):
+    """How much `mask` stands out from `ring` in a grey image: (a - b) / (a + b + 20), 0 to 1."""
+    if not ring.any():
+        return 0.0
+    a, b = float(gray[mask].mean()), float(gray[ring].mean())
+    return abs(a - b) / (a + b + 20.0)
 
 
 def get_entry_point():
@@ -186,7 +199,11 @@ class GlareAgent(NpcAgent):
         saved JPEGs, as DeepSight reads them. One line per step with any such
         pixels goes to road_user_glare.jsonl: the pixel count, the mean cover,
         the share of pixels with cover >= WASHED_COVER, and hidden = at least
-        half of them washed out. Pixels hidden behind something else are not
+        half of them washed out. clean_contrast and glared_contrast say how much
+        they stand out from the pixels around them in each frame;
+        visible_clean = they do in the clean one (else darkness hides them, not
+        glare), and glare_occluded = visible clean but hidden or no longer
+        standing out once glared. Pixels hidden behind something else are not
         counted: the seg camera does not see them either. Needs glare on (the
         seg camera only runs then).
         """
@@ -210,8 +227,9 @@ class GlareAgent(NpcAgent):
         area of its projected box, pixels how many of those the camera sees of
         it (seg + matching depth, so the lead car in front of it does not
         count), then the same cover numbers as _label_road_users over those
-        pixels. Few pixels = hidden by the car in front; hidden = what the
-        camera does see is mostly washed out by glare. Lights on or off, it is
+        pixels, contrasts included. Few pixels = hidden by the car in front;
+        visible_clean false = darkness hides it; glare_occluded = it stands out
+        in the clean frame but not once glared. Lights on or off, it is
         labelled. Needs glare on (the seg camera only runs then).
         """
         cam = self._front_cam()
@@ -245,7 +263,9 @@ class GlareAgent(NpcAgent):
                      'type': actor.type_id, 'lights_on': lit,
                      'distance_m': round(float(footprint[4]), 1), 'footprint_px': (x1 - x0) * (y1 - y0)}
             cover = self._cover(mask) if mask.any() else None
-            entry.update(cover or {'pixels': 0, 'mean_cover': 0.0, 'washed': 0.0, 'hidden': False})
+            entry.update(cover or {'pixels': 0, 'mean_cover': 0.0, 'washed': 0.0, 'hidden': False,
+                                   'clean_contrast': 0.0, 'glared_contrast': 0.0, 'visible_clean': False,
+                                   'glare_occluded': False})
             self._append('hazard_glare.jsonl', entry)
 
     def _front_cam(self):
@@ -264,8 +284,18 @@ class GlareAgent(NpcAgent):
         g = glared[mask].astype(np.float32)
         cover = np.clip((g - c) / np.maximum(255.0 - c, 1.0), 0.0, 1.0)
         washed = float(np.mean(cover >= WASHED_COVER))
+        # Does it stand out from its surroundings, before and after the glare?
+        size = 2 * RING_PX + 1
+        near = cv2.dilate(mask.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)))
+        ring = (near > 0) & ~mask
+        clean_contrast, glared_contrast = (_contrast(img, mask, ring) for img in (clean, glared))
+        hidden = washed >= 0.5
+        visible = clean_contrast >= VISIBLE_CONTRAST
         return {'pixels': int(mask.sum()), 'mean_cover': round(float(cover.mean()), 3),
-                'washed': round(washed, 3), 'hidden': washed >= 0.5}
+                'washed': round(washed, 3), 'hidden': hidden,
+                'clean_contrast': round(clean_contrast, 3), 'glared_contrast': round(glared_contrast, 3),
+                'visible_clean': visible,
+                'glare_occluded': visible and (hidden or glared_contrast < VISIBLE_CONTRAST)}
 
     def _append(self, name, entry):
         with open(os.path.join(self.save_dir, name), 'a', encoding='utf-8') as fh:

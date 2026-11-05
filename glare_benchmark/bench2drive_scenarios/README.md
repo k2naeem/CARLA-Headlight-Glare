@@ -103,9 +103,10 @@ When the routes finish, `run.py` prints one line per run: steps with glaring
 headlights on each front camera, missing frames, and PASS/FAIL. A run passes
 when every frame got its segmentation and depth, every front frame with
 glaring headlights changed, and every front frame without them is identical to
-the clean copy. `hidden` and `hazard` count the steps a pedestrian or cyclist,
-or a scenario's hazard vehicle, is mostly washed out by glare, out of the
-steps one is in view (see `../custom_scenarios`). `python run.py summary <folder>` prints it again for any
+the clean copy. `hidden` counts the steps a pedestrian or cyclist is mostly
+washed out by glare, out of the steps one is in view; `hazard` counts the
+steps a scenario's hazard vehicle, visible in the clean frame, is hidden by
+glare, out of the steps it is visible clean (see `../custom_scenarios`). `python run.py summary <folder>` prints it again for any
 folder, including the copy on your Mac.
 
 NpcAgent obeys lights and stops for cars, but ignores pedestrians and cannot
