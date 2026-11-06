@@ -75,7 +75,7 @@ from srunner.scenariomanager.scenarioatomics.atomic_criteria import CollisionTes
 from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import (DriveDistance,
                                                                                InTriggerDistanceToVehicle)
 from srunner.scenarios.basic_scenario import BasicScenario
-from srunner.tools.background_manager import ChangeOppositeBehavior, LeaveSpaceInFront
+from srunner.tools.background_manager import ChangeOppositeBehavior, ChangeRoadBehavior, LeaveSpaceInFront
 
 BEAMS = {
     'low': carla.VehicleLightState.Position | carla.VehicleLightState.LowBeam,
@@ -89,6 +89,9 @@ ROLE = 'scenario no lights'
 HAZARD_ROLE = 'scenario no lights hazard'
 CAR_MODEL = 'vehicle.lincoln.mkz_2017'   # the oncoming model of carla_script_closed_loop.py
 BICYCLE_MODEL = 'vehicle.diamondback.century'
+# BackgroundActivity keeps this many of its cars ahead of the ego in its lane;
+# our scenarios set it to 0 while they run and put it back after.
+BA_FRONT_VEHICLES = 2
 # street_lights="off" darkens every street light this close to the meet point,
 # which covers the whole stretch make_routes.py picks.
 DARK_RADIUS_M = 130.0
@@ -671,6 +674,8 @@ class GlarePedestrianPopOut(_GlareScenario):
         root = py_trees.composites.Sequence(name='GlarePedestrianPopOut')
         if self.route_mode:
             root.add_child(LeaveSpaceInFront(self._distance + 20.0))
+            # No background car ahead of the ego in its lane: the hazard must meet the ego.
+            root.add_child(ChangeRoadBehavior(num_front_vehicles=0))
             root.add_child(ChangeOppositeBehavior(active=False))
 
         main = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
@@ -713,6 +718,7 @@ class GlarePedestrianPopOut(_GlareScenario):
 
         if self.route_mode:
             root.add_child(ChangeOppositeBehavior(active=True))
+            root.add_child(ChangeRoadBehavior(num_front_vehicles=BA_FRONT_VEHICLES))
         root.add_child(ActorDestroy(self._adversary))
         root.add_child(ActorDestroy(self._car))
         if self._second is not None:
@@ -776,6 +782,8 @@ class GlareOncomingOvertake(_GlareScenario):
         root = py_trees.composites.Sequence(name='GlareOncomingOvertake')
         if self.route_mode:
             root.add_child(LeaveSpaceInFront(self._distance + 20.0))
+            # No background car ahead of the ego in its lane: the hazard must meet the ego.
+            root.add_child(ChangeRoadBehavior(num_front_vehicles=0))
             root.add_child(ChangeOppositeBehavior(active=False))
 
         main = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE,
@@ -790,6 +798,7 @@ class GlareOncomingOvertake(_GlareScenario):
 
         if self.route_mode:
             root.add_child(ChangeOppositeBehavior(active=True))
+            root.add_child(ChangeRoadBehavior(num_front_vehicles=BA_FRONT_VEHICLES))
         root.add_child(ActorDestroy(self._lead))
         root.add_child(ActorDestroy(self._overtaker))
         return root

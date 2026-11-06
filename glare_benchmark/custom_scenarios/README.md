@@ -16,7 +16,10 @@ every run.
 
 Both run at night on a straight road with one lane each way. The glare
 source is a car the scenario drives itself, headlights on, so the timing is
-the same every run, whatever speed the ego drives. A vehicle glares only
+the same every run, whatever speed the ego drives. While a scenario runs,
+Bench2Drive's background traffic keeps no car ahead of the ego in its lane
+(it is pushed ahead and removed at the trigger), so nothing stands between
+the hazard and the ego; its usual two cars come back afterwards. A vehicle glares only
 while its headlights are on: the glare agent never switches on the lights of
 a vehicle the scenario drives, so one it drives dark stays dark.
 
