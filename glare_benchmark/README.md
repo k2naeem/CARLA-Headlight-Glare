@@ -10,8 +10,9 @@ glare_benchmark/
 
 **bench2drive_scenarios/** saves the Bench2Drive night routes worth testing
 under glare and runs them, one route at a time, with your glare on DeepSight's
-six cameras. The leaderboard's NpcAgent drives for now; DeepSight can replace
-it later. See [its README](bench2drive_scenarios/README.md).
+six cameras. The leaderboard's NpcAgent drives by default and records the
+labels; `--driver deepsight` lets DeepSight drive
+([guide](../DEEPSIGHT_GLARE_SCENARIOS.md)). See [its README](bench2drive_scenarios/README.md).
 
 **custom_scenarios/** covers what Bench2Drive cannot guarantee: glare and the
 hazard at the same moment. Two scenarios are built: a pedestrian stepping out

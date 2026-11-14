@@ -192,7 +192,7 @@ NpcAgent ignores pedestrians, so it drives into the pedestrian in every run.
 It brakes for a vehicle in its lane, but on the head-on routes that is not
 enough, so those runs usually end in a collision too. This is expected: for
 now the runs are about the images. Brakes and
-collisions mean something once DeepSight drives.
+collisions mean something once DeepSight drives (`--driver deepsight`).
 
 ## How it plugs into Bench2Drive
 
@@ -200,7 +200,8 @@ The leaderboard loads scenario classes from every
 `$SCENARIO_RUNNER_ROOT/srunner/scenarios/*.py`. For a route of ours, `run.py`
 builds a temporary folder with links to Bench2Drive's scenario files plus
 `glare_popout.py`, and points `SCENARIO_RUNNER_ROOT` at it. Bench2Drive's
-files stay unedited. DeepSight's agent will run these routes the same way.
+files stay unedited. DeepSight runs these routes the same way
+(`--driver deepsight`, see [the DeepSight guide](../../DEEPSIGHT_GLARE_SCENARIOS.md)).
 
 ## Branching off
 

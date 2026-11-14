@@ -2,8 +2,8 @@
 
 The Bench2Drive night scenarios worth testing under oncoming headlight glare,
 saved one file per route, plus one script that runs them with your glare on
-DeepSight's cameras. For now the leaderboard's NpcAgent drives; no model is
-loaded.
+DeepSight's cameras. The leaderboard's NpcAgent drives by default (no model
+loaded); `--driver deepsight` lets DeepSight drive.
 
 | File | |
 | --- | --- |
@@ -133,9 +133,8 @@ On the Mac; copies each run's video and the summary, keeping folder names:
 rsync -avm --include='*/' --include='compare_CAM_FRONT.mp4' --include='summary.csv' --exclude='*' <user>@<ubuntu-host>:glare_runs/ ~/glare_runs/
 ```
 
-## Adding DeepSight later
+## Running DeepSight instead of NpcAgent
 
-`run.py` picks the agent from `DRIVERS`. DeepSight's agent with glare already
-exists (`glare_qwen_agent.py` at the repo root). Adding it means a `deepsight`
-entry pointing there, passing the checkpoint as the agent config, and reading
-its output, which DeepSight writes under `Scenarios/<route>/` in the run folder.
+`--driver deepsight --checkpoint <model folder>` lets DeepSight drive on the
+glared cameras (`glare_qwen_agent.py` at the repo root). Step-by-step guide:
+[DEEPSIGHT_GLARE_SCENARIOS.md](../../DEEPSIGHT_GLARE_SCENARIOS.md).

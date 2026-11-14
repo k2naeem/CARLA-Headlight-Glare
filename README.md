@@ -173,6 +173,13 @@ python3 Carla_script.py
 `spawn_points.py` draws numbered spawn-point markers in the spectator view - use
 it to pick the ego and destination indices.
 
+## Closed loop: DeepSight in the glare scenarios
+
+[DEEPSIGHT_GLARE_SCENARIOS.md](DEEPSIGHT_GLARE_SCENARIOS.md) explains how to run
+DeepSight through our night scenarios with live glare on its cameras: a
+pedestrian stepping out of oncoming glare, and a car or motorcycle pulling
+out of it head-on. The scenarios are in [glare_benchmark/](glare_benchmark/README.md).
+
 ## Repository layout
 
 | File | Purpose |
@@ -206,7 +213,8 @@ predicted waypoints and its steering and braking. The target is DeepSight, a
 camera-only vision-language planner, evaluated on Bench2Drive overtaking scenarios
 at night. The glare is injected in the agent's `tick()`, before the frames are
 written to disk, so it reaches both the current surround views and the history
-frames the model reads back. That code is not in this repository yet.
+frames the model reads back. To run DeepSight through our night glare
+scenarios, see [DEEPSIGHT_GLARE_SCENARIOS.md](DEEPSIGHT_GLARE_SCENARIOS.md).
 
 **Physically motivated, not photometrically calibrated.** The aperture
 diffraction model and wavelength scaling are principled, but nothing here has

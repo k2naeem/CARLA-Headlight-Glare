@@ -10,6 +10,10 @@ One script for everything. Run it from the conda env that has the CARLA
     python run.py run 3410 --glare 1.0         # or one route (or 3410,3436, or all)
     python run.py summary ~/glare_runs         # glare report for every run in a folder
 
+DeepSight drives instead of NpcAgent with --driver deepsight:
+
+    python run.py run glare_popout --glare 1.0 --driver deepsight --checkpoint ~/ckpt/checkpoint-20000
+
 Our own pop-out-from-glare scenarios (../custom_scenarios) run the same way
 once ../custom_scenarios/make_routes.py has written their routes:
 
@@ -77,9 +81,11 @@ FAMILIES = {
 }
 FAMILY_OF = {scenario: fam for fam, types in FAMILIES.items() for scenario in types}
 
-# Leaderboard agent per driver. DeepSight goes here later (glare_qwen_agent.py
-# at the repo root already wraps it); its output layout differs, see README.
-DRIVERS = {'npc': os.path.join(HERE, 'glare_agent.py')}
+# Leaderboard agent per driver. npc: the leaderboard's NpcAgent drives and
+# glare_agent.py records the cameras and labels. deepsight: DeepSight drives on
+# glared cameras (glare_qwen_agent.py at the repo root); it needs --checkpoint.
+DRIVERS = {'npc': os.path.join(HERE, 'glare_agent.py'),
+           'deepsight': os.path.join(REPO, 'glare_qwen_agent.py')}
 
 GLARE_CAMERAS = ('CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT')
 
@@ -215,7 +221,10 @@ def cmd_check(args):
         present = os.path.isdir(maps) and any(n.startswith(town) for n in os.listdir(maps))
         report(present, '%s installed (AdditionalMaps_0.9.15)' % town)
 
-    for f in ('glare_injector.py', 'glare_mask_closed_loop.py', 'deepsight_input_agent.py'):
+    report(os.path.exists(os.path.join(b2d, 'team_code', 'qwen_b2d_agent.py')),
+           "DeepSight's agent (team_code/qwen_b2d_agent.py), for --driver deepsight", warn=True)
+    for f in ('glare_injector.py', 'glare_mask_closed_loop.py', 'deepsight_input_agent.py',
+              'glare_qwen_agent.py'):
         report(os.path.exists(os.path.join(REPO, f)), '%s in %s' % (f, REPO))
 
     sys.path[:0] = [os.path.join(carla, 'PythonAPI', 'carla')]
@@ -281,8 +290,9 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file, scenario_root):
 def run_one(args, b2d, carla, scenario, out_root):
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     size = '' if args.glare_size == 1.0 else 'x%g' % args.glare_size     # glare1x2 = level 1, twice the size
-    run_dir = os.path.join(out_root, '%s_glare%g%s_%s_%s' % (scenario['name'], args.glare, size,
-                                                             args.headlights, stamp))
+    driver = '' if args.driver == 'npc' else '_' + args.driver
+    run_dir = os.path.join(out_root, '%s_glare%g%s_%s%s_%s' % (scenario['name'], args.glare, size,
+                                                               args.headlights, driver, stamp))
     os.makedirs(run_dir)
     route_file = scenario['file']
     overlay = scenario_overlay(b2d) if scenario.get('custom') else None
@@ -290,7 +300,8 @@ def run_one(args, b2d, carla, scenario, out_root):
     cmd = [sys.executable, os.path.join('leaderboard', 'leaderboard', 'leaderboard_evaluator.py'),
            '--routes=%s' % route_file, '--repetitions=1', '--track=SENSORS',
            '--checkpoint=%s' % os.path.join(run_dir, 'results.json'),
-           '--agent=%s' % DRIVERS[args.driver], '--agent-config=%s' % args.driver,
+           '--agent=%s' % DRIVERS[args.driver],
+           '--agent-config=%s' % (args.checkpoint if args.driver == 'deepsight' else args.driver),
            '--debug=0', '--resume=True', '--port=%d' % args.port,
            '--traffic-manager-port=%d' % args.tm_port, '--gpu-rank=%d' % args.gpu]
 
@@ -326,6 +337,16 @@ def cmd_run(args):
     if not os.path.exists(os.path.join(b2d, 'leaderboard', 'leaderboard', 'leaderboard_evaluator.py')):
         sys.exit('No Bench2Drive leaderboard in %s (python run.py check)' % b2d)
     scenarios = select(args.target, load_index())
+    if args.driver == 'deepsight':
+        args.checkpoint = args.checkpoint or os.environ.get('DEEPSIGHT_CKPT')
+        if not args.checkpoint or not os.path.isdir(os.path.expanduser(args.checkpoint)):
+            sys.exit('--driver deepsight needs --checkpoint (or DEEPSIGHT_CKPT): '
+                     'the folder of the DeepSight model checkpoint.')
+        args.checkpoint = os.path.abspath(os.path.expanduser(args.checkpoint))
+        if args.headlights != 'scene':
+            # Switching on traffic's headlights lives in glare_agent.py (npc only).
+            print('--driver deepsight keeps the scene\'s own headlights (--headlights scene).')
+            args.headlights = 'scene'
     os.makedirs(out_root, exist_ok=True)
     print('%d scenario(s), glare %g (size %g), headlights %s, driver %s -> %s'
           % (len(scenarios), args.glare, args.glare_size, args.headlights, args.driver, out_root))
@@ -403,7 +424,8 @@ def summarize_run(run_dir, root):
 
 
 def summarize(root):
-    runs = sorted(d for d, subdirs, _ in os.walk(root) if 'meta' in subdirs)
+    # Runs recorded by glare_agent.py (npc). DeepSight's own output has no clean/ copy.
+    runs = sorted(d for d, subdirs, _ in os.walk(root) if 'meta' in subdirs and 'clean' in subdirs)
     if not runs:
         print('No runs under %s' % root)
         return 1
@@ -460,7 +482,11 @@ def main():
                         "'scene' keeps Bench2Drive's lighting, where most cars are dark")
     r.add_argument('--debug-every', type=int, default=10,
                    help='save debug/ frames with each lit car and its glare verdict every N steps (0 = off)')
-    r.add_argument('--driver', choices=sorted(DRIVERS), default='npc')
+    r.add_argument('--driver', choices=sorted(DRIVERS), default='npc',
+                   help='npc (default): NpcAgent drives, cameras and labels recorded; '
+                        'deepsight: DeepSight drives on the glared cameras (needs --checkpoint)')
+    r.add_argument('--checkpoint', help='DeepSight model checkpoint folder, for --driver deepsight '
+                                        '(default $DEEPSIGHT_CKPT)')
     r.add_argument('--port', type=int, default=30000)
     r.add_argument('--tm-port', type=int, default=50000)
     r.add_argument('--gpu', type=int, default=0)
