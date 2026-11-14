@@ -34,7 +34,8 @@ from glare_mask_closed_loop import (
 )
 from glare_injector import GlareInjector, GLARE_CAMERAS, spec_transform
 from deepsight_input_agent import (
-    JPEG_QUALITY, HISTORY_STEPS, SURROUND_CAMERAS, make_glare_agent_class,
+    AGENT_HZ, JPEG_QUALITY, HISTORY_STEPS, HISTORY_SECONDS, SURROUND_CAMERAS,
+    make_glare_agent_class,
 )
 
 
@@ -73,8 +74,10 @@ args = parser.parse_args()
 
 random.seed(args.seed)
 
-# Run timing (single source of truth)
-FIXED_DELTA = 0.05                  # seconds per tick
+# Run timing (single source of truth). DeepSight's leaderboard runs at 10 Hz
+# and calls the agent every tick, so its "2.0 s ago" history slot is 20 steps
+# back. Ticking at any other rate changes how old the history frames are.
+FIXED_DELTA = 1.0 / AGENT_HZ        # seconds per tick (0.1)
 DURATION_S = args.duration          # length of the run
 FPS = 1.0 / FIXED_DELTA             # video framerate, matches the tick rate
 
@@ -142,7 +145,7 @@ logger.info("Traffic manager connected on port %d", TM_PORT)
 traffic_manager.set_synchronous_mode(True)
 traffic_manager.set_random_device_seed(args.seed)   # same traffic behaviour per seed
 traffic_manager.set_global_distance_to_leading_vehicle(2.5)
-logger.info("Synchronous mode enabled (fixed 20 FPS)")
+logger.info("Synchronous mode enabled (fixed %g FPS)", FPS)
 
 weather = carla.WeatherParameters(
     cloudiness=80.0,             # Overcast, dark sky (no moonlight bleed)
@@ -751,6 +754,7 @@ for npc in opposite_npcs:
     if npc.is_alive:
         npc.set_light_state(HEADLIGHTS_ON)
 
+TICKS_PER_SECOND = int(round(FPS))   # headlights are reapplied once a second
 OBSTACLE_SPAWN_TICK = int(OBSTACLE_SPAWN_AT_S / FIXED_DELTA)
 OBSTACLE_RETRY_TICKS = int(OBSTACLE_SPAWN_RETRY_S / FIXED_DELTA)
 
@@ -792,7 +796,7 @@ try:
             except RuntimeError:
                 pass
 
-        if tick % 20 == 0:
+        if tick % TICKS_PER_SECOND == 0:
             for npc in opposite_npcs:
                 if npc.is_alive:
                     npc.set_light_state(HEADLIGHTS_ON)
@@ -887,6 +891,9 @@ for step in range(max(HISTORY_STEPS), n_steps, 10):
     if [s['path'] for s in meta['slots'][:4]] != expected:
         history_bad += 1
 
+# The history frames must be as old as DeepSight's prompt says they are.
+history_ages = [round(k * FIXED_DELTA, 3) for k in HISTORY_STEPS]
+
 glare_ms = [e['glare_ms'] for e in glare_log if 'glare_ms' in e]
 wait_ms = [e['wait_ms'] for e in glare_log if 'wait_ms' in e]
 glare_on = args.severity > 0
@@ -898,6 +905,10 @@ checks = [
      injector.missing_aux_frames == 0, "%d missing" % injector.missing_aux_frames),
     ("history slots point to the earlier CAM_FRONT files",
      history_bad == 0, "%d of %d sampled steps wrong" % (history_bad, history_checked)),
+    ("history frames are as old as the prompt says (%s s)"
+     % "/".join("%g" % s for s in HISTORY_SECONDS),
+     history_ages == list(HISTORY_SECONDS),
+     "ages at %g Hz: %s s" % (FPS, "/".join("%g" % a for a in history_ages))),
 ]
 if glare_on:
     checks += [
@@ -933,6 +944,8 @@ summary = {
     'steps_with_glare': len(glared_steps),
     'first_glare_step': glared_steps[0] if glared_steps else None,
     'missing_aux_frames': injector.missing_aux_frames,
+    'warmup_frames': injector.warmup_frames,
+    'tick_hz': FPS,
     'mean_agent_step_ms': float(np.mean(step_ms)) if step_ms else None,
     'mean_glare_ms_per_camera': float(np.mean(glare_ms)) if glare_ms else None,
     'run_wall_s': run_wall_s,

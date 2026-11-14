@@ -18,8 +18,10 @@ images an agent drives on.
                         class GlareQwenAgent(GlareMixin, QwenAgent):
                             pass
 
-                    Inside Bench2Drive it builds its own injector on the first
-                    tick. A script that owns the world and ego builds one itself
+                    Inside Bench2Drive it builds its own injector in setup(),
+                    which DeepSight's leaderboard calls after the ego exists and
+                    before the first tick, so frame 1 already has seg/depth.
+                    A script that owns the world and ego builds one itself
                     and hands it over with agent.use_glare_injector(injector).
 
 Severity comes from the GLARE_SEVERITY environment variable (default 1.0), so
@@ -52,6 +54,14 @@ GLARE_CAMERAS = ('CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT')
 # Headlight bits of carla.VehicleLightState. A car glares only with one set.
 _LOW_BEAM = int(carla.VehicleLightState.LowBeam)
 _HIGH_BEAM = int(carla.VehicleLightState.HighBeam)
+
+
+def headlamp_count(actor):
+    """How many headlights `actor` has: 2 on four wheels, 1 on a motorcycle, 0 on a bicycle."""
+    if int(actor.attributes.get('number_of_wheels', 4)) >= 4:
+        return 2
+    return 1 if actor.attributes.get('base_type') == 'motorcycle' else 0
+
 
 # How many frames of seg/depth to keep while waiting. Older ones are dropped.
 _MAX_BUFFERED_FRAMES = 10
@@ -115,6 +125,8 @@ class GlareInjector:
     world, hero     the CARLA world and the ego vehicle the cameras ride on
     sensor_specs    the agent's sensors() list (camera id, pose, size, FOV)
     severity        glare level; 0 = off, 1 = the tuned look
+    size            glare size; 2 = every part of the glare (core, bloom,
+                    halo, starburst, veil) twice as large, 1 = the tuned look
     strict          if a frame's seg/depth never arrives, raise instead of
                     passing the frame through without glare
 
@@ -124,12 +136,13 @@ class GlareInjector:
     """
 
     def __init__(self, world, hero, sensor_specs, cameras=GLARE_CAMERAS,
-                 severity=1.0, depth_downscale=4, max_distance=70.0,
+                 severity=1.0, size=1.0, depth_downscale=4, max_distance=70.0,
                  min_detected_px=150, intensity=3.5, veil_strength=0.22,
                  frame_timeout_s=2.0, strict=False):
         self.world = world
         self.hero = hero
         self.severity = float(severity)
+        self.size = float(size)
         self.depth_downscale = depth_downscale
         self.max_distance = max_distance
         self.min_detected_px = min_detected_px
@@ -140,10 +153,14 @@ class GlareInjector:
 
         self.log = []
         self.missing_aux_frames = 0
+        self.warmup_frames = 0
+        # Optional actor -> bool set by the caller; vehicles it rejects never
+        # glare (the Bench2Drive agent uses it to leave parked cars out).
+        self.vehicle_filter = None
         self._cond = threading.Condition()
         self._records_frame = None
         self._records = []
-        self._static = {}            # actor id -> (bbox extent, bbox centre, 4+ wheels)
+        self._static = {}            # actor id -> (bbox extent, bbox centre, headlamp count)
 
         self.cameras = {}
         rgb_specs = {s['id']: s for s in sensor_specs
@@ -157,6 +174,11 @@ class GlareInjector:
             if self.severity > 0.0:
                 self._spawn_aux(cam)
             self.cameras[cam_id] = cam
+
+        # In synchronous mode the seg/depth cameras first render on the tick
+        # after they spawn. Frames up to this one can never have seg/depth.
+        self._spawn_frame = (world.get_snapshot().frame
+                             if self.severity > 0.0 and self.cameras else None)
 
         # Build the cached FFT starbursts now, so the first frame of the run is
         # not a few hundred ms slower than the rest.
@@ -190,7 +212,7 @@ class GlareInjector:
 
     def _on_seg(self, cam, image):
         labels = decode_labels(image)
-        tf = image.transform              # the camera's world pose at capture
+        tf = image.transform              # pose at capture; on large maps see camera_pose()
         pose = (tf.get_matrix(), (tf.location.x, tf.location.y, tf.location.z))
         with self._cond:
             cam.seg[image.frame] = labels
@@ -204,6 +226,26 @@ class GlareInjector:
             cam.depth[image.frame] = depth
             self._prune(cam)
             self._cond.notify_all()
+
+    @staticmethod
+    def camera_pose(cam, image_pose=None):
+        """The camera's world pose, (4x4 matrix, location), in vehicle coordinates.
+
+        On CARLA's large maps (Town12, Town13) a sensor image's transform is
+        relative to a shifted world origin, kilometres from the coordinates
+        actors report, so a pose read from the image puts every car far behind
+        the camera. Read it from the sensor actor instead: in synchronous mode
+        the world has not moved since the frame was captured, so it is the
+        same pose, in the vehicles' coordinates. Falls back to the image's pose
+        if the sensor is gone.
+        """
+        for sensor in cam.sensors:
+            try:
+                tf = sensor.get_transform()
+                return tf.get_matrix(), (tf.location.x, tf.location.y, tf.location.z)
+            except RuntimeError:
+                continue
+        return image_pose
 
     @staticmethod
     def _prune(cam):
@@ -240,8 +282,9 @@ class GlareInjector:
     def _vehicle_records(self, frame):
         """Every car that could glare, read once per frame and shared by all cameras.
 
-        Skips the ego, anything under four wheels (bicycles, motorcycles), and
-        any car whose headlights are off. In synchronous mode the world does not
+        Skips the ego, bicycles, and any vehicle whose low or high beams are
+        off: a vehicle glares only with its headlights on. A motorcycle glares
+        from one lamp. In synchronous mode the world does not
         move until the next tick, so these positions match the frame's images.
         """
         if self._records_frame == frame:
@@ -252,16 +295,17 @@ class GlareInjector:
             try:
                 if actor.id == self.hero.id or not actor.is_alive:
                     continue
+                if self.vehicle_filter is not None and not self.vehicle_filter(actor):
+                    continue
                 if actor.id not in self._static:
                     bb = actor.bounding_box
-                    wheels = int(actor.attributes.get('number_of_wheels', 4))
                     self._static[actor.id] = (
                         (bb.extent.x, bb.extent.y, bb.extent.z),
                         (bb.location.x, bb.location.y, bb.location.z),
-                        wheels >= 4,
+                        headlamp_count(actor),
                     )
-                extent, bb_center, four_wheels = self._static[actor.id]
-                if not four_wheels or not self._lights_on(actor):
+                extent, bb_center, lamps = self._static[actor.id]
+                if not lamps or not self._lights_on(actor):
                     continue
                 tf = actor.get_transform()
                 fwd = tf.get_forward_vector()
@@ -270,6 +314,7 @@ class GlareInjector:
                     'matrix': tf.get_matrix(),
                     'extent': extent,
                     'bb_center': bb_center,
+                    'lamps': lamps,
                     'forward': (fwd.x, fwd.y, fwd.z),
                     'location': (tf.location.x, tf.location.y, tf.location.z),
                 })
@@ -294,8 +339,18 @@ class GlareInjector:
         if cam is None or self.severity <= 0.0:
             return bgr
 
-        entry = {'frame': int(frame), 'camera': cam_id, 'severity': self.severity,
-                 'glaring_headlights': 0, 'verdicts': {}, 'aux_missing': False}
+        entry = {'frame': int(frame), 'camera': cam_id, 'severity': self.severity, 'size': self.size,
+                 'glaring_headlights': 0, 'verdicts': {}, 'aux_missing': False,
+                 'warmup': False}
+
+        # A frame rendered before the seg/depth cameras existed: pass it through
+        # without waiting. It is warm-up, not a missing frame, so strict mode
+        # does not stop the run over it.
+        if self._spawn_frame is not None and frame <= self._spawn_frame:
+            self.warmup_frames += 1
+            entry['warmup'] = True
+            self.log.append(entry)
+            return bgr
 
         t_wait = time.perf_counter()
         aux = self._wait_for(cam, frame)
@@ -311,7 +366,8 @@ class GlareInjector:
                 raise RuntimeError(msg)
             logger.warning(msg)
             return bgr
-        seg, depth, (cam_matrix, cam_loc) = aux
+        seg, depth, image_pose = aux
+        cam_matrix, cam_loc = self.camera_pose(cam, image_pose)
 
         # Bench2Drive hands the agent a [:, :, :3] view of a BGRA buffer. OpenCV
         # cannot read that strided view, so copy it into a contiguous array.
@@ -329,11 +385,14 @@ class GlareInjector:
         entry['glaring_headlights'] = len(headlights)
 
         if headlights:
+            # The glare code sizes everything in proportion to the focal length
+            # it is given, so scaling it scales the whole glare.
+            size_px = cam.focal_px * self.size
             mask, rgb = geometry_glare_mask(rgb, seg, headlights, require_bright=False,
-                                            require_vehicle=True, focal_px=cam.focal_px)
+                                            require_vehicle=True, focal_px=size_px)
             out = glare(mask, rgb, intensity=self.intensity, headlight_pixels=headlights,
                         veil_strength=self.veil_strength, severity=self.severity,
-                        focal_px=cam.focal_px)
+                        focal_px=size_px)
         else:
             out = bgr
 
@@ -362,6 +421,9 @@ class GlareInjector:
         if self.missing_aux_frames:
             logger.warning("[GLARE] %d frame(s) went to the agent without glare "
                            "because their seg/depth was missing", self.missing_aux_frames)
+        if self.warmup_frames:
+            logger.info("[GLARE] %d frame(s) predate the seg/depth cameras and "
+                        "went to the agent without glare", self.warmup_frames)
 
 
 class GlareMixin:
@@ -382,6 +444,17 @@ class GlareMixin:
         """Use an injector built by the caller (scripts that own the world and ego)."""
         self._glare = injector
 
+    def setup(self, *args, **kwargs):
+        """Build the injector as soon as the agent is set up.
+
+        DeepSight's leaderboard calls setup() after RouteScenario has spawned
+        the ego and before the first tick. Spawning the seg/depth cameras here
+        means they render alongside the agent's own cameras from frame 1. If
+        the ego is not there yet, tick() tries again.
+        """
+        super().setup(*args, **kwargs)
+        self._glare_injector()
+
     def tick(self, input_data):
         tick_data = super().tick(input_data)
         injector = self._glare_injector()
@@ -395,10 +468,10 @@ class GlareMixin:
         return tick_data
 
     def _glare_injector(self):
-        """Create the injector on the first tick.
+        """The injector, created on first use (normally from setup()).
 
-        The ego does not exist yet when setup() runs, so this cannot happen
-        there. Imported here so the module loads outside the leaderboard.
+        Returns None while there is no ego. Imported here so the module loads
+        outside the leaderboard.
         """
         injector = getattr(self, '_glare', None)
         if injector is None:
@@ -407,10 +480,11 @@ class GlareMixin:
             if hero is None:
                 return None
             severity = float(os.environ.get('GLARE_SEVERITY', '1.0'))
+            size = float(os.environ.get('GLARE_SIZE', '1.0'))
             strict = os.environ.get('GLARE_STRICT', '0').lower() in ('1', 'true', 'yes')
             injector = GlareInjector(CarlaDataProvider.get_world(), hero, self.sensors(),
                                      cameras=self.glare_cameras, severity=severity,
-                                     strict=strict)
+                                     size=size, strict=strict)
             self._glare = injector
         return injector
 
