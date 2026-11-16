@@ -142,6 +142,25 @@ lists them.
 To see what glare does to DeepSight, compare `results.json` and DeepSight's
 output between the `glare1x2` run and the `glare0` run of the same route.
 
+**Copying a run to your laptop.** `pull_run.py` gathers the important parts of
+one or more runs into `~/glare_pulls/<run>/`. That folder holds:
+- `summary.txt`: the score, infractions, glared-frame count, and the controls at each scenario moment.
+- `CAM_FRONT.mp4`
+- `key/`: front-camera frames from 1 s before, 0.5 s before and at each moment, each with
+  DeepSight's reasoning and the glaring-headlight count.
+
+Run it on the GPU machine:
+
+```bash
+python pull_run.py ~/glare_runs/94001_*_deepsight_*
+```
+
+Then copy the folder from the laptop:
+
+```bash
+scp -r <user>@<machine>:glare_pulls ~/Downloads/
+```
+
 **Labels.** The per-frame labels come only from runs with the default driver,
 NpcAgent. These include the clean copy of every frame, the clean-vs-glared
 comparison video, and how much glare hides the pedestrian or overtaker in
