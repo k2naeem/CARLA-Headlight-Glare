@@ -9,6 +9,8 @@ For each run folder it writes glare_pulls/<run name>/ with:
     summary.txt            driving score, route completion, any crashes, and DeepSight's
                            reasoning over the run: one line each time its reason (the
                            <think> text) or its braking changes, with the steps and times
+    driving.csv            every step: time, speed, the speed DeepSight aimed for, brake,
+                           throttle, steer (opens in Excel or Numbers)
     CAM_FRONT.mp4         what DeepSight saw from the front camera, at 10 fps
     key/                   CAM_FRONT at 1 s, 0.5 s before and at each scenario moment,
                            each with a .txt of DeepSight's reasoning, controls, plan and
@@ -118,6 +120,16 @@ def timeline(metas):
     return lines
 
 
+def write_driving(metas, path):
+    """One row per step of DeepSight's driving: speeds in m/s, controls 0 to 1 (steer -1 to 1)."""
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write('step,time_s,speed_ms,desired_speed_ms,brake,throttle,steer\n')
+        for m in metas:
+            fh.write('%d,%.1f,%.2f,%.2f,%.2f,%.2f,%.3f\n'
+                     % (m['step'], m['timestamp'], m.get('speed', float('nan')), m.get('desired_speed', float('nan')),
+                        m.get('brake', 0), m.get('throttle', 0), m.get('steer', 0)))
+
+
 def pull(run_dir, dest_root):
     run_dir = os.path.abspath(run_dir.rstrip('/'))
     ds_dirs = [d for d in glob.glob(os.path.join(run_dir, 'Scenarios', '*')) if os.path.isdir(os.path.join(d, 'meta'))]
@@ -162,6 +174,7 @@ def pull(run_dir, dest_root):
                 fh.write('glaring headlights on CAM_FRONT: %s\n' % ('no log' if n is None else n))
                 fh.write('planned trajectory: %s\n\n' % m.get('planning_trajectory'))
                 fh.write(str(m.get('output', '')))
+    write_driving(metas, os.path.join(dest, 'driving.csv'))
     write_video(os.path.join(ds, 'camera', 'CAM_FRONT'), os.path.join(dest, 'CAM_FRONT.mp4'))
 
     summary = [os.path.basename(run_dir), ''] + results_lines(os.path.join(run_dir, 'results.json')) + ['']
