@@ -1,10 +1,9 @@
 """DeepSight with live headlight glare, for Bench2Drive.
 
-Copy this file into DeepSight's bench2drive/team_code/ and put this repo on
-PYTHONPATH (for glare_injector and glare_mask_closed_loop). Then run DeepSight's
-evaluation script with
-
-    TEAM_AGENT=team_code/glare_qwen_agent.py
+DeepSight (https://github.com/hotdogcheesewhite/DeepSight, Apache License 2.0)
+is by its authors and is not part of this repo: QwenAgent is imported from your
+own clone. glare_benchmark/bench2drive_scenarios/run.py --driver deepsight loads
+this file as the leaderboard agent and puts both repos on PYTHONPATH.
 
 GLARE_SEVERITY (default 1.0), GLARE_SIZE (default 1.0) and GLARE_STRICT
 (default 0) set the glare; see glare_injector.py. Severity 0 runs DeepSight

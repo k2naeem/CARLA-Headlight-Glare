@@ -180,6 +180,11 @@ DeepSight through our night scenarios with live glare on its cameras: a
 pedestrian stepping out of oncoming glare, and a car or motorcycle pulling
 out of it head-on. The scenarios are in [glare_benchmark/](glare_benchmark/README.md).
 
+DeepSight is not part of this repo. It is by its authors, at
+[hotdogcheesewhite/DeepSight](https://github.com/hotdogcheesewhite/DeepSight)
+(Apache License 2.0), and is used from your own clone at run time. See
+[Credits](#credits).
+
 ## Repository layout
 
 | File | Purpose |
@@ -236,6 +241,26 @@ segmentation drive the corruption model and the ground truth. In the closed-loop
 work they feed only the glare renderer; the driving model still sees camera
 images alone.
 
+## Credits
+
+This repo builds on these projects. It doesn't include or change any of their
+code; each is used from your own installation under its own license.
+
+- **DeepSight.** *DeepSight: Long-Horizon World Modeling via Latent States
+  Prediction for End-to-End Autonomous Driving* (ICML 2026).
+  [github.com/hotdogcheesewhite/DeepSight](https://github.com/hotdogcheesewhite/DeepSight).
+  Code and [weights](https://huggingface.co/zhangthu/deepsight) are under the
+  Apache License 2.0. `glare_qwen_agent.py` subclasses its `QwenAgent` to add
+  glare; all credit for the model and its agent goes to its authors. Please
+  cite their paper if you use DeepSight.
+- **Bench2Drive.** [github.com/Thinklab-SJTU/Bench2Drive](https://github.com/Thinklab-SJTU/Bench2Drive),
+  CC BY-NC-ND 4.0. Its leaderboard and scenario runner ship inside DeepSight's
+  `bench2drive` folder. Its route files are not redistributed here:
+  `run.py extract` copies them out on each machine.
+- **CARLA 0.9.15.** [github.com/carla-simulator/carla](https://github.com/carla-simulator/carla).
+  Code under MIT, assets under CC-BY.
+
 ## License
 
-MIT - see [LICENSE](LICENSE).
+Our code is MIT - see [LICENSE](LICENSE). The MIT license covers only this
+repo's own code, not the projects listed under Credits.
