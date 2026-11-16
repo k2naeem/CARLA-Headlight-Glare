@@ -13,6 +13,11 @@ The glare is added to DeepSight's camera images inside the agent's `tick()`,
 before DeepSight saves and reads them. So its current views and its history
 frames both see the glare. Nothing in DeepSight or Bench2Drive is edited.
 
+DeepSight is by its authors:
+[hotdogcheesewhite/DeepSight](https://github.com/hotdogcheesewhite/DeepSight),
+Apache License 2.0. This repo doesn't include it; you clone it yourself
+below. Please cite their paper if you use it.
+
 ## What you need
 
 - **Machine:** Ubuntu with an NVIDIA GPU (CARLA needs both).
