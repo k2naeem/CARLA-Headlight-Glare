@@ -6,11 +6,9 @@ Run it on the machine that ran DeepSight, then copy one folder to your laptop:
     scp -r <user>@<machine>:glare_pulls ~/Downloads/            # on the laptop
 
 For each run folder it writes glare_pulls/<run name>/ with:
-    summary.txt            driving score, infractions, how many frames were glared, the
-                           scenario moments, and DeepSight's brake/throttle and reason
-                           around each
-    reasoning.txt          every step: game time, controls, glaring headlights, speed of
-                           the plan, and DeepSight's one-line reason (its <think> text)
+    summary.txt            driving score, route completion, any crashes, and DeepSight's
+                           reasoning over the run: one line each time its reason (the
+                           <think> text) or its braking changes, with the steps and times
     CAM_FRONT.mp4         what DeepSight saw from the front camera, at 10 fps
     key/                   CAM_FRONT at 1 s, 0.5 s before and at each scenario moment,
                            each with a .txt of DeepSight's reasoning, controls, plan and
@@ -49,11 +47,11 @@ def results_lines(path):
         return ['results.json has no route record: the run did not finish']
     rec = records[0]
     scores = rec.get('scores', {})
-    lines = ['status %s' % rec.get('status'),
-             'driving score %.1f  (route completion %.1f x penalty %.2f)'
-             % (scores.get('score_composed', 0), scores.get('score_route', 0), scores.get('score_penalty', 0))]
-    hits = {k: v for k, v in rec.get('infractions', {}).items() if v}
-    lines += ['%s: %s' % (k, '; '.join(map(str, v))) for k, v in hits.items()] or ['no infractions']
+    lines = ['Driving score     %.1f' % scores.get('score_composed', 0),
+             'Route completion  %.1f%%' % scores.get('score_route', 0)]
+    # min_speed_infractions are Bench2Drive's notes on speed versus traffic, not crashes.
+    hits = {k: v for k, v in rec.get('infractions', {}).items() if v and k != 'min_speed_infractions'}
+    lines += ['%s: %s' % (k, '; '.join(map(str, v))) for k, v in hits.items()] or ['Infractions       none']
     return lines
 
 
@@ -62,6 +60,22 @@ def reason(meta):
     text = str(meta.get('output', ''))
     found = re.search(r'<think>(.*?)</think>', text, re.S)
     return ' '.join((found.group(1) if found else text.split('\n')[0]).split())
+
+
+# DeepSight writes its reason in Chinese from a small set of phrases; these give the gist in English.
+GLOSS = [('行人', 'pedestrian'), ('横穿', 'crossing'), ('对向来车', 'oncoming car'), ('道路狭窄', 'narrow road'),
+         ('会车', 'passing risk'), ('STOP', 'STOP sign'), ('交叉车流', 'cross traffic'), ('前方车辆', 'car ahead'),
+         ('追尾', 'rear-end risk'), ('能见度低', 'low visibility'), ('昏暗', 'dark'), ('视野受限', 'limited view'),
+         ('碰撞', 'collision risk'), ('红灯', 'red light'), ('施工', 'construction'), ('障碍', 'obstacle'),
+         ('停车等待', 'STOP AND WAIT'), ('保持当前车道', 'keep lane'), ('减速', 'slow down'), ('加速', 'speed up'),
+         ('变道', 'change lane'), ('绕行', 'go around')]
+
+
+def gloss(text):
+    """English keywords for a reason, in the order they appear, e.g. 'Hard: pedestrian, crossing, slow down'."""
+    found = sorted((text.find(zh), en) for zh, en in GLOSS if zh in text)
+    level = text.split('.')[0]
+    return '%s: %s' % (level, ', '.join(en for _, en in found)) if found else level
 
 
 def glare_by_frame(log):
@@ -85,27 +99,23 @@ def write_video(cam_dir, path):
     return 'CAM_FRONT.mp4: %d frames' % len(frames)
 
 
-def write_reasoning(metas, events, glare, path):
-    """One line per step, with each scenario moment marked where it happens."""
-    timed = [e for e in events if 'time_s' in e and 'frame' in e]
-    anchor = timed[0] if timed else None      # turns game time into a CARLA frame for the glare log
-    marks = list(timed)
-    with open(path, 'w', encoding='utf-8') as fh:
-        fh.write('step  time_s  brake throttle steer  glare  plan_m  reason\n')
-        fh.write('(glare: glaring headlights on CAM_FRONT, - if not logged; '
-                 'plan_m: how far the planned path reaches, short = slowing or stopping)\n\n')
-        for m in metas:
-            while marks and marks[0]['time_s'] <= m['timestamp'] + 0.05:
-                fh.write('---- %s at %.1f s ----\n' % (marks[0]['event'], marks[0]['time_s']))
-                marks.pop(0)
-            n = None
-            if anchor:
-                n = glare.get(anchor['frame'] + round((m['timestamp'] - anchor['time_s']) * SIM_HZ))
-            plan = m.get('planning_trajectory') or []
-            reach = max((abs(p[1]) for p in plan), default=0.0) if plan and len(plan[0]) > 1 else 0.0
-            fh.write('%4d  %6.1f  %5.2f %8.2f %5.2f  %5s  %6.1f  %s\n'
-                     % (m['step'], m['timestamp'], m.get('brake', 0), m.get('throttle', 0), m.get('steer', 0),
-                        '-' if n is None else n, reach, reason(m)))
+def timeline(metas):
+    """DeepSight's reason over the run: one line each time its reason or braking changes."""
+    lines = ['DeepSight\'s reasoning (1 step = 0.1 s; a new line whenever the reason or the braking changes)',
+             '']
+    rows = []
+    for m in metas:
+        key = (reason(m), 'BRAKE' if m.get('brake', 0) >= 0.5 else 'drive')
+        if rows and rows[-1][0] == key:
+            rows[-1][2] = m
+        else:
+            rows.append([key, m, m])
+    for (text, action), first, last in rows:
+        lines.append('%5.1f-%5.1f s  steps %3d-%3d  %-5s  %s'
+                     % (first['timestamp'], last['timestamp'], first['step'], last['step'], action, gloss(text)))
+        if ':' in gloss(text):          # show DeepSight's own words under the keywords
+            lines.append('%37s%s' % ('', text))
+    return lines
 
 
 def pull(run_dir, dest_root):
@@ -134,22 +144,9 @@ def pull(run_dir, dest_root):
         m['step'] = int(os.path.splitext(os.path.basename(f))[0])
         metas.append(m)
 
-    info = {}
-    if os.path.exists(os.path.join(run_dir, 'run_info.json')):
-        info = json.load(open(os.path.join(run_dir, 'run_info.json'), encoding='utf-8'))
-    summary = ['run %s' % os.path.basename(run_dir),
-               'glare %s, size %s, driver %s' % (info.get('glare_level'), info.get('glare_size'), info.get('driver')), '']
-    summary += results_lines(os.path.join(run_dir, 'results.json')) + ['']
-    glared = sum(1 for n in glare.values() if n > 0)
-    summary.append('CAM_FRONT frames with glare: %d of %d' % (glared, len(glare)) if log
-                   else 'no glare_log.jsonl: glare was off (glare 0) or the run stopped early')
-    summary.append('')
-
     for e in events:
         if not metas or 'time_s' not in e:
             continue
-        summary.append('%s at %.1f s  %s' % (e['event'], e['time_s'],
-                                            {k: v for k, v in e.items() if k not in ('event', 'frame', 'time_s')}))
         for off in OFFSETS_S:
             m = min(metas, key=lambda m: abs(m['timestamp'] - (e['time_s'] + off)))
             frame = e['frame'] + round((m['timestamp'] - e['time_s']) * SIM_HZ)
@@ -158,18 +155,17 @@ def pull(run_dir, dest_root):
             img = os.path.join(ds, 'camera', 'CAM_FRONT', '%05d.jpg' % m['step'])
             if os.path.exists(img):
                 shutil.copy(img, os.path.join(dest, 'key', name + '.jpg'))
-            controls = 'brake %.2f  throttle %.2f  steer %.2f' % (m.get('brake', 0), m.get('throttle', 0), m.get('steer', 0))
-            glare_txt = 'glaring headlights on CAM_FRONT: %s' % ('no log' if n is None else n)
-            summary.append('   %+.1f s  step %4d  %s  %s\n            %s' % (off, m['step'], controls, glare_txt, reason(m)))
             with open(os.path.join(dest, 'key', name + '.txt'), 'w', encoding='utf-8') as fh:
                 fh.write('%s, %+.1f s: game time %.1f s, step %d, CARLA frame %d\n'
                          % (e['event'], off, m['timestamp'], m['step'], frame))
-                fh.write('%s\n%s\n' % (controls, glare_txt))
+                fh.write('brake %.2f  throttle %.2f  steer %.2f\n' % (m.get('brake', 0), m.get('throttle', 0), m.get('steer', 0)))
+                fh.write('glaring headlights on CAM_FRONT: %s\n' % ('no log' if n is None else n))
                 fh.write('planned trajectory: %s\n\n' % m.get('planning_trajectory'))
                 fh.write(str(m.get('output', '')))
+    write_video(os.path.join(ds, 'camera', 'CAM_FRONT'), os.path.join(dest, 'CAM_FRONT.mp4'))
 
-    write_reasoning(metas, events, glare, os.path.join(dest, 'reasoning.txt'))
-    summary += ['', 'reasoning.txt: DeepSight\'s reason at all %d steps' % len(metas), write_video(os.path.join(ds, 'camera', 'CAM_FRONT'), os.path.join(dest, 'CAM_FRONT.mp4'))]
+    summary = [os.path.basename(run_dir), ''] + results_lines(os.path.join(run_dir, 'results.json')) + ['']
+    summary += timeline(metas)
     with open(os.path.join(dest, 'summary.txt'), 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(summary) + '\n')
     print('\n'.join(summary))
