@@ -14,6 +14,11 @@ DeepSight drives instead of NpcAgent with --driver deepsight:
 
     python run.py run glare_popout --glare 1.0 --driver deepsight --checkpoint ~/ckpt/checkpoint-20000
 
+A DeepSight stored anywhere works: --b2d (B2D_DIR) is its bench2drive folder,
+--checkpoint (DEEPSIGHT_CKPT) its weights, and --deepsight-agent
+(DEEPSIGHT_AGENT) its agent class as module:Class if it is not DeepSight's
+team_code.qwen_b2d_agent:QwenAgent.
+
 Our own pop-out-from-glare scenarios (../custom_scenarios) run the same way
 once ../custom_scenarios/make_routes.py has written their routes:
 
@@ -104,6 +109,12 @@ def carla_dir(args):
     if not path:
         sys.exit('Set --carla or CARLA_ROOT to your CARLA 0.9.15 folder.')
     return os.path.abspath(os.path.expanduser(path))
+
+
+def deepsight_agent(args):
+    """The DeepSight agent class glare is added to, as module:Class."""
+    return (getattr(args, 'deepsight_agent', None) or os.environ.get('DEEPSIGHT_AGENT')
+            or 'team_code.qwen_b2d_agent:QwenAgent')
 
 
 def out_dir(args):
@@ -221,8 +232,10 @@ def cmd_check(args):
         present = os.path.isdir(maps) and any(n.startswith(town) for n in os.listdir(maps))
         report(present, '%s installed (AdditionalMaps_0.9.15)' % town)
 
-    report(os.path.exists(os.path.join(b2d, 'team_code', 'qwen_b2d_agent.py')),
-           "DeepSight's agent (team_code/qwen_b2d_agent.py), for --driver deepsight", warn=True)
+    agent_module = deepsight_agent(args).partition(':')[0]
+    agent_file = os.path.join(*agent_module.split('.')) + '.py'
+    report(os.path.exists(os.path.join(b2d, agent_file)),
+           "DeepSight's agent (%s in %s), for --driver deepsight" % (agent_file, b2d), warn=True)
     for f in ('glare_injector.py', 'glare_mask_closed_loop.py', 'deepsight_input_agent.py',
               'glare_qwen_agent.py'):
         report(os.path.exists(os.path.join(REPO, f)), '%s in %s' % (f, REPO))
@@ -284,6 +297,8 @@ def leaderboard_env(args, b2d, carla, run_dir, route_file, scenario_root):
         'GLARE_STRICT': '0' if args.no_strict else '1',
         'CUDA_VISIBLE_DEVICES': str(args.gpu),
     })
+    if args.driver == 'deepsight':
+        env['DEEPSIGHT_AGENT'] = deepsight_agent(args)
     return env
 
 
@@ -466,6 +481,9 @@ def main():
     paths = argparse.ArgumentParser(add_help=False)
     paths.add_argument('--b2d', help='Bench2Drive folder (default $B2D_DIR)')
     paths.add_argument('--carla', help='CARLA 0.9.15 folder (default $CARLA_ROOT)')
+    paths.add_argument('--deepsight-agent', metavar='MODULE:CLASS',
+                       help="DeepSight's agent class in --b2d, for --driver deepsight "
+                            "(default $DEEPSIGHT_AGENT or team_code.qwen_b2d_agent:QwenAgent)")
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     sub.add_parser('extract', parents=[paths], help='save the glare scenarios into scenarios/')
