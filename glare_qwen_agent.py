@@ -5,6 +5,11 @@ is by its authors and is not part of this repo: QwenAgent is imported from your
 own clone. glare_benchmark/bench2drive_scenarios/run.py --driver deepsight loads
 this file as the leaderboard agent and puts both repos on PYTHONPATH.
 
+DEEPSIGHT_AGENT picks the agent class to add glare to, as "module:Class"
+(default "team_code.qwen_b2d_agent:QwenAgent", DeepSight's own). A fork whose
+agent has another file or class name sets it instead of editing this file;
+the module is imported from $B2D_DIR, the fork's bench2drive folder.
+
 GLARE_SEVERITY (default 1.0), GLARE_SIZE (default 1.0) and GLARE_STRICT
 (default 0) set the glare; see glare_injector.py. Severity 0 runs DeepSight
 unchanged.
@@ -18,13 +23,26 @@ agent from running outside its authors' machines:
     When that file does not exist, the history slots point to a black image
     written into this route's save folder instead.
 """
+import importlib
 import os
 
 import cv2
 import numpy as np
 
-from team_code.qwen_b2d_agent import QwenAgent
 from glare_injector import GlareMixin
+
+DEFAULT_AGENT = 'team_code.qwen_b2d_agent:QwenAgent'
+
+
+def load_agent_class(spec):
+    """The class named by a 'module:Class' spec, e.g. DeepSight's QwenAgent."""
+    module_name, _, class_name = spec.partition(':')
+    if not module_name or not class_name:
+        raise ValueError("DEEPSIGHT_AGENT must look like 'module:Class', got %r" % spec)
+    return getattr(importlib.import_module(module_name), class_name)
+
+
+QwenAgent = load_agent_class(os.environ.get('DEEPSIGHT_AGENT') or DEFAULT_AGENT)
 
 # The black history placeholder hard-coded in qwen_b2d_agent.format_message().
 DEEPSIGHT_BLACK_PATH = ('/mnt/nas-data-1/zhanglingjun.zlj1/ad_data_process/'

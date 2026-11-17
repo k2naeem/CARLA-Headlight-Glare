@@ -112,6 +112,69 @@ route. Run inside `tmux` over SSH, so a dropped connection doesn't stop the run.
 | `--gpu` | 0 | GPU for CARLA and DeepSight |
 | `--port`, `--tm-port` | 30000, 50000 | Change these to run two jobs at once |
 | `--out` | `$GLARE_OUT` | Where run folders go |
+| `--b2d` | `$B2D_DIR` | DeepSight's `bench2drive` folder: its agent code and leaderboard |
+| `--deepsight-agent` | `$DEEPSIGHT_AGENT` | DeepSight's agent class, if yours isn't `team_code.qwen_b2d_agent:QwenAgent` |
+
+## Using your own DeepSight
+
+You don't need DeepSight inside this repo, or the original weights. `run.py`
+finds DeepSight through two paths, and both can point anywhere on your machine:
+
+| Path | Set with | Point it at |
+| --- | --- | --- |
+| Your DeepSight code | `--b2d` or `B2D_DIR` | the `bench2drive` folder of your DeepSight clone or fork |
+| Your weights | `--checkpoint` or `DEEPSIGHT_CKPT` | your trained checkpoint folder: the one `from_pretrained` loads, with `config.json` and the weights |
+
+For example, with your DeepSight in `/data/me/DeepSight-v2` and your weights in
+`/data/me/ckpt/run7`:
+
+```bash
+python run.py run 94001 --driver deepsight --b2d /data/me/DeepSight-v2/bench2drive --checkpoint /data/me/ckpt/run7 --glare 1.0 --glare-size 2
+```
+
+Or set the paths once in `~/.bashrc` and leave the options out:
+
+```bash
+echo 'export B2D_DIR=/data/me/DeepSight-v2/bench2drive DEEPSIGHT_CKPT=/data/me/ckpt/run7' >> ~/.bashrc
+```
+
+`run.py` starts the leaderboard from your `bench2drive` folder, with both your
+DeepSight and this repo on `PYTHONPATH`. Your agent code comes from your folder
+and the glare code from this repo, so nothing is copied between them. Every
+scenario in this guide, every glare option and `pull_run.py` work the same way
+with your DeepSight.
+
+**If your agent has a different file or class name.** By default the glare is
+added to DeepSight's own agent class, `QwenAgent` in
+`team_code/qwen_b2d_agent.py`. If yours is called something else, name it as
+`module:Class`, relative to your `bench2drive` folder:
+
+```bash
+python run.py run 94001 --driver deepsight --deepsight-agent team_code.my_agent:MyQwenAgent
+```
+
+Or set `export DEEPSIGHT_AGENT=team_code.my_agent:MyQwenAgent` once. You don't
+need to edit any file in this repo.
+
+**What your agent must keep from DeepSight's**, so the glare reaches it:
+- `tick()` returns the camera images in `tick_data['imgs']`, under the names
+  `CAM_FRONT`, `CAM_FRONT_LEFT` and `CAM_FRONT_RIGHT`. The glare is drawn on
+  these three.
+- `run_step()` reads the images only after `tick()` has returned, as
+  DeepSight's does. Anything that reads the cameras straight from the sensor
+  data, without going through `tick()`, would see frames with no glare.
+- `sensors()` still lists those three cameras. The glare code places its
+  helper cameras at the same position, so it needs their poses.
+
+**Then check the setup.** Your `bench2drive` folder needs the same GPU fix as
+in Setup: the `int(4)` line in **your**
+`leaderboard/leaderboard/leaderboard_evaluator.py`. Your environment also
+needs `networkx` and `shapely`. `check` reports anything missing, including
+whether it found your agent file:
+
+```bash
+python run.py check --b2d /data/me/DeepSight-v2/bench2drive --deepsight-agent team_code.my_agent:MyQwenAgent
+```
 
 ## The scenarios
 
