@@ -131,6 +131,69 @@ scenario by editing parameters in its route XML (speeds, distances, beams,
 lights). [custom_scenarios/README.md](glare_benchmark/custom_scenarios/README.md)
 lists them.
 
+## Running your own scenarios
+
+`run.py` runs your own scenarios with the same glare and DeepSight setup. Today
+that takes a few manual steps, because `run.py` only reads two route lists:
+- `bench2drive_scenarios/scenarios/index.json`, written by `run.py extract`;
+- `custom_scenarios/routes/index.json`, written by `make_routes.py`.
+
+It also only adds one scenario file of ours, `glare_popout.py`, to
+Bench2Drive's scenarios.
+
+**If your route uses Bench2Drive's own scenario types** (for example
+`PedestrianCrossing` or `AccidentTwoWays`):
+
+1. Put your route XML in its own folder under
+   `glare_benchmark/custom_scenarios/routes/`, for example
+   `routes/mine/90001_MyRoute_Town05.xml`.
+2. Add an entry for it to the `scenarios` list in
+   `custom_scenarios/routes/index.json`:
+
+   ```json
+   {"id": "90001", "name": "90001_MyRoute_Town05", "family": "mine",
+    "scenario": "PedestrianCrossing", "town": "Town05", "file": "mine/90001_MyRoute_Town05.xml"}
+   ```
+
+   `file` is relative to `routes/`. `id` and `family` are what you type after
+   `run.py run`. Pick ids no other route uses.
+3. Run it like any other route:
+
+   ```bash
+   python run.py run 90001 --driver deepsight --glare 1.0 --glare-size 2
+   ```
+
+**If you wrote your own scenario class** (a `.py` file, like our
+`glare_popout.py`), also do this:
+
+4. Put the file in `glare_benchmark/custom_scenarios/`.
+5. Add its file name to `CUSTOM_MODULES` near the top of `run.py`:
+   `CUSTOM_MODULES = ('glare_popout.py', 'my_scenario.py')`.
+
+Routes in `custom_scenarios/routes/index.json` are run with a temporary copy of
+Bench2Drive's scenario folder that also links in every file in
+`CUSTOM_MODULES`. That way the leaderboard finds your class without any file in
+Bench2Drive being edited.
+
+**Things to watch:**
+- **`make_routes.py` rewrites `custom_scenarios/routes/index.json`.** Running
+  it again removes your entries, so add them back afterwards. It only deletes
+  `routes/glare_popout/`, so your XML files in their own folder are kept.
+- **Only vehicles with their headlights on glare.** With `--driver deepsight`,
+  each scene keeps its own lighting, and Bench2Drive leaves most background
+  cars' headlights off at night. Your scenario needs to turn on the headlights
+  of the cars that should glare. `glare_popout.py` does this for its cars with
+  `set_light_state`.
+- **Run it at night.** Set a negative `sun_altitude_angle` in the route's
+  weather; [make_routes.py](glare_benchmark/custom_scenarios/make_routes.py)'s
+  `NIGHT` settings are a good start.
+- **Use towns you have installed.** Town12 and Town13 need CARLA's
+  AdditionalMaps.
+
+Everything else works as it does for our scenarios: your own DeepSight weights
+(`--checkpoint`) or code (`B2D_DIR`), the glare options, the run folders, and
+`pull_run.py`.
+
 ## What a run gives you
 
 ```
