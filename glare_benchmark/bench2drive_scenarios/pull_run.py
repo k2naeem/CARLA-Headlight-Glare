@@ -65,8 +65,10 @@ def reason(meta):
 
 
 # DeepSight writes its reason in Chinese from a small set of phrases; these give the gist in English.
-GLOSS = [('行人', 'pedestrian'), ('横穿', 'crossing'), ('对向来车', 'oncoming car'), ('道路狭窄', 'narrow road'),
-         ('会车', 'passing risk'), ('STOP', 'STOP sign'), ('交叉车流', 'cross traffic'), ('前方车辆', 'car ahead'),
+# 车 is any vehicle, so the vehicle phrases say "vehicle", not "car".
+GLOSS = [('行人', 'pedestrian'), ('横穿', 'crossing'), ('对向来车', 'oncoming vehicle'), ('道路狭窄', 'narrow road'),
+         ('骑行者', 'rider'), ('摩托车', 'motorcycle'), ('自行车', 'bicycle'), ('紧急车辆', 'emergency vehicle'),
+         ('会车', 'passing risk'), ('STOP', 'STOP sign'), ('交叉车流', 'cross traffic'), ('前方车辆', 'vehicle ahead'),
          ('追尾', 'rear-end risk'), ('能见度低', 'low visibility'), ('昏暗', 'dark'), ('视野受限', 'limited view'),
          ('碰撞', 'collision risk'), ('红灯', 'red light'), ('施工', 'construction'), ('障碍', 'obstacle'),
          ('停车等待', 'STOP AND WAIT'), ('保持当前车道', 'keep lane'), ('减速', 'slow down'), ('加速', 'speed up'),
